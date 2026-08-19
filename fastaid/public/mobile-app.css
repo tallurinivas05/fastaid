@@ -1,0 +1,285 @@
+
+/* FastAid v18 — true mobile-app layout */
+html, body {
+  margin: 0 !important;
+  min-height: 100%;
+  background: #e8eee9 !important;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* The whole application is the phone, not only #app. */
+.topbar, #home, #app {
+  width: 100%;
+  max-width: none;
+}
+
+@media (min-width: 600px) {
+  body {
+    width: 390px !important;
+    min-width: 390px !important;
+    max-width: 390px !important;
+    height: 844px !important;
+    min-height: 844px !important;
+    max-height: 844px !important;
+    margin: 24px auto !important;
+    background: #fff !important;
+    border: 1px solid #d8e1dc;
+    border-radius: 30px;
+    box-shadow: 0 18px 55px rgba(18,52,39,.22);
+    overflow: hidden !important;
+    position: relative;
+  }
+
+  .topbar {
+    height: 64px !important;
+    padding: 0 14px !important;
+    position: sticky !important;
+    top: 0;
+    z-index: 1000;
+  }
+
+  .brand-btn {
+    font-size: 20px !important;
+    gap: 6px !important;
+  }
+
+  .brand-ambulance, .brand-blood {
+    font-size: 19px !important;
+  }
+
+  .reset {
+    padding: 8px 11px !important;
+    font-size: 12px !important;
+  }
+
+  .home {
+    min-height: calc(844px - 64px) !important;
+    height: calc(844px - 64px) !important;
+    padding: 28px 16px 40px !important;
+    justify-content: flex-start !important;
+    overflow-y: auto !important;
+  }
+
+  .home-logo {
+    font-size: 50px !important;
+    gap: 9px !important;
+    margin-top: 18px !important;
+  }
+
+  .home h1 {
+    font-size: 48px !important;
+    letter-spacing: -3px !important;
+    margin: 8px 0 !important;
+  }
+
+  .home-sub {
+    font-size: 13px !important;
+    margin-bottom: 26px !important;
+    text-align: center;
+  }
+
+  .roles {
+    width: 100% !important;
+    max-width: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+
+  .role-card {
+    width: 100% !important;
+    min-height: 145px !important;
+    padding: 17px 14px !important;
+    border-radius: 18px !important;
+    gap: 7px !important;
+  }
+
+  .role-icon {
+    font-size: 34px !important;
+  }
+
+  .role-card strong {
+    font-size: 18px !important;
+  }
+
+  .role-card small {
+    font-size: 12px !important;
+    min-height: auto !important;
+  }
+
+  .open-btn {
+    padding: 10px 13px !important;
+    font-size: 12px !important;
+    border-radius: 10px !important;
+  }
+
+  #app {
+    width: 100% !important;
+    max-width: none !important;
+    height: calc(844px - 64px) !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 16px 14px 34px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .app-head {
+    margin-bottom: 18px !important;
+  }
+
+  .app-head h2 {
+    font-size: 24px !important;
+  }
+
+  .back {
+    width: 42px !important;
+    height: 42px !important;
+  }
+
+  .live-pill {
+    font-size: 9px !important;
+    padding: 7px 9px !important;
+  }
+
+  .section-title {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+  }
+
+  .section-title h2 {
+    font-size: 24px !important;
+  }
+
+  .two-col, .receiver-layout, .hospital-control-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+
+  .card {
+    padding: 14px !important;
+    border-radius: 16px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .card h3 {
+    font-size: 13px !important;
+  }
+
+  .real-map, .real-map.tall, #hospitalArrivalMap {
+    height: 330px !important;
+    min-height: 330px !important;
+    border-radius: 14px !important;
+  }
+
+  .list {
+    max-height: none !important;
+  }
+
+  .stats {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  .stat {
+    padding: 10px !important;
+  }
+
+  .stat strong {
+    font-size: 17px !important;
+  }
+
+  .form {
+    grid-template-columns: 1fr !important;
+  }
+
+  .full {
+    grid-column: auto !important;
+  }
+
+  .btn, button, .role-card, a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .btn {
+    min-height: 42px !important;
+    padding: 9px 12px !important;
+    font-size: 12px !important;
+  }
+
+  .toast {
+    left: 14px !important;
+    right: 14px !important;
+    bottom: 14px !important;
+    text-align: center !important;
+  }
+}
+
+/* Real phones: use the complete available viewport, with no desktop frame. */
+@media (max-width: 599px) {
+  html, body {
+    width: 100% !important;
+    min-width: 0 !important;
+    background: #fff !important;
+    overflow-x: hidden !important;
+  }
+
+  body {
+    margin: 0 !important;
+  }
+
+  .topbar {
+    padding: 0 12px !important;
+  }
+
+  .home {
+    padding: 26px 14px 36px !important;
+    justify-content: flex-start !important;
+  }
+
+  .roles {
+    grid-template-columns: 1fr !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+
+  .role-card {
+    width: 100% !important;
+  }
+
+  #app {
+    width: 100% !important;
+    padding: 14px 12px 32px !important;
+  }
+
+  .real-map, .real-map.tall, #hospitalArrivalMap {
+    height: 330px !important;
+    min-height: 330px !important;
+  }
+}
+
+/* v19 live-dispatch UI */
+@media (min-width: 600px) {
+  .captain-layout > .map-card { order: -1; }
+  .user-small-map { height: 235px !important; min-height: 235px !important; }
+  .captain-layout .real-map { height: 420px !important; min-height: 420px !important; }
+}
+@media (max-width: 599px) {
+  .user-small-map { height: 220px !important; min-height: 220px !important; }
+  .captain-layout { display:flex !important; flex-direction:column !important; }
+  .captain-layout > .map-card { order:-1; }
+  .captain-layout .real-map { height: 330px !important; min-height: 330px !important; }
+}
+.booking-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.compact-notice { flex:1 1 100%; }
+.nearby-mini-list { margin-top:12px; display:flex; flex-direction:column; gap:7px; }
+.mini-amb { display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid #d8e9df; border-radius:11px; background:#f7fcf9; }
+.mini-amb small { display:block; color:#6c8178; margin-top:2px; }
+.captain-login-card, .hospital-login-card { margin-bottom:12px; }
+.captain-login-card .field, .hospital-login-card .field { max-width:100%; }
