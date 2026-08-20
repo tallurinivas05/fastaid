@@ -17,6 +17,7 @@ function offset(center,km,deg){const a=deg*Math.PI/180;return {lat:center.lat+(k
 function makeAmbulances(center){return BAND_DISTANCES.map((km,i)=>{const p=offset(center,km,ANGLES[i%ANGLES.length]);return {id:`AMB-${String(i+1).padStart(3,'0')}`,number:`FA-DEMO-${String(i+1).padStart(2,'0')}`,captainId:`CAP-${String(i+1).padStart(2,'0')}`,captain:captains[i],type:types[i%types.length],lat:p.lat,lng:p.lng,homeLat:p.lat,homeLng:p.lng,distanceBand:km<=5?'0–5 km':km<=10?'5–10 km':km<=15?'10–15 km':'15–20 km',online:true,status:'AVAILABLE',government:i===0,eta:Math.max(4,Math.round(km*1.7)),fare:800+i*120};});}
 const state={demoMode:true,demoUser:{...FALLBACK_USER},ambulances:makeAmbulances(FALLBACK_USER),bookings:[]};
 let seq=1000;
+const bookingTimers=new Map();
 app.use(express.json());app.use(express.static(path.join(__dirname,'public')));
 const clone=()=>JSON.parse(JSON.stringify(state));
 const broadcast=()=>io.emit('state:update',clone());
@@ -33,7 +34,7 @@ function visibleAmbulances(){
   ['5–10 km','10–15 km','15–20 km'].forEach(b=>{const a=all.find(x=>x.distanceBand===b);if(a)picks.push(a);});
   return picks.slice(0,6);
 }
-function resetDemo(){state.ambulances=makeAmbulances(state.demoUser);state.bookings=[];}
+function resetDemo(){for(const t of bookingTimers.values())clearTimeout(t);bookingTimers.clear();state.ambulances=makeAmbulances(state.demoUser);state.bookings=[];}
 
 app.get('/api/state',(req,res)=>{
   if(validCoord(req.query.lat,req.query.lng)&&state.bookings.length===0){setDemoUser(req.query.lat,req.query.lng);}
@@ -48,15 +49,15 @@ function requestCandidate(booking){
   if(!candidate){booking.candidateIndex=0;return requestCandidate(booking);}
   booking.ambulanceId=candidate.id;booking.captainId=candidate.captainId;booking.captain=candidate.captain;booking.ambulanceNumber=candidate.number;booking.ambulanceType=candidate.type;booking.government=candidate.government;booking.lat=candidate.lat;booking.lng=candidate.lng;booking.eta=candidate.eta;booking.fare=candidate.fare;booking.requestedAt=Date.now();candidate.status='REQUESTED';booking.requestedCaptain=candidate.captain;
   broadcast();
-  clearTimeout(booking._timer);
-  booking._timer=setTimeout(()=>{
+  clearTimeout(bookingTimers.get(booking.id));
+  bookingTimers.set(booking.id,setTimeout(()=>{
     const b=state.bookings.find(x=>x.id===booking.id);const a=state.ambulances.find(x=>x.id===candidate.id);
     if(!b||!a||b.status!=='REQUESTED'||b.ambulanceId!==candidate.id)return;
     a.status='AVAILABLE';b.candidateIndex+=1;
     if(b.candidateIndex<b.candidateIds.length){requestCandidate(b);return;}
     // Safety for demo: never end in "not available". Restart the nearest candidate.
     b.candidateIndex=0;requestCandidate(b);
-  },8000);
+  },8000));
 }
 app.post('/api/bookings',(req,res)=>{
   const candidates=rankedAvailable().map(a=>a.id);
@@ -65,9 +66,9 @@ app.post('/api/bookings',(req,res)=>{
   const b={id:`FA-${++seq}`,userLat:state.demoUser.lat,userLng:state.demoUser.lng,ambulanceId:null,captainId:null,captain:'Finding nearest demo captain…',ambulanceNumber:'SEARCHING',ambulanceType:'DEMO',government:false,lat:state.demoUser.lat,lng:state.demoUser.lng,eta:0,fare:0,status:'REQUESTED',candidateIds:ids,candidateIndex:0,createdAt:Date.now()};
   state.bookings.push(b);requestCandidate(b);res.json(b);
 });
-app.post('/api/bookings/:id/decline',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a)a.status='AVAILABLE';clearTimeout(b._timer);b.candidateIndex+=1;if(b.candidateIndex>=b.candidateIds.length)b.candidateIndex=0;requestCandidate(b);res.json(b);});
-app.post('/api/bookings/:id/accept',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(!a)return res.status(400).json({error:'Captain not found'});clearTimeout(b._timer);b.status='CAPTAIN_ACCEPTED';b.acceptedAt=Date.now();a.status='BUSY';broadcast();res.json(b);});
-app.post('/api/bookings/:id/status',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});const allowed=['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL','COMPLETED'];if(!allowed.includes(req.body.status))return res.status(400).json({error:'Invalid status'});b.status=req.body.status;if(validCoord(req.body.lat,req.body.lng)){b.lat=Number(req.body.lat);b.lng=Number(req.body.lng);}const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a){a.lat=b.lat;a.lng=b.lng;if(b.status==='COMPLETED'){a.status='AVAILABLE';a.lat=a.homeLat;a.lng=a.homeLng;}}broadcast();res.json(b);});
+app.post('/api/bookings/:id/decline',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a)a.status='AVAILABLE';clearTimeout(bookingTimers.get(b.id));bookingTimers.delete(b.id);b.candidateIndex+=1;if(b.candidateIndex>=b.candidateIds.length)b.candidateIndex=0;requestCandidate(b);res.json(b);});
+app.post('/api/bookings/:id/accept',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(!a)return res.status(400).json({error:'Captain not found'});clearTimeout(bookingTimers.get(b.id));bookingTimers.delete(b.id);b.status='CAPTAIN_ACCEPTED';b.acceptedAt=Date.now();a.status='BUSY';broadcast();res.json(b);});
+app.post('/api/bookings/:id/status',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});const allowed=['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL','COMPLETED'];if(!allowed.includes(req.body.status))return res.status(400).json({error:'Invalid status'});b.status=req.body.status;if(validCoord(req.body.lat,req.body.lng)){b.lat=Number(req.body.lat);b.lng=Number(req.body.lng);}const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a){a.lat=b.lat;a.lng=b.lng;if(b.status==='COMPLETED'){bookingTimers.delete(b.id);a.status='AVAILABLE';a.lat=a.homeLat;a.lng=a.homeLng;}}broadcast();res.json(b);});
 io.on('connection',s=>s.emit('state:update',clone()));
 app.use('/api',(req,res,next)=>res.status(404).json({error:'API endpoint not found'}));
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
