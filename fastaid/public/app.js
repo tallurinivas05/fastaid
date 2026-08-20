@@ -1,13 +1,14 @@
 const socket=io();
 const FALLBACK_USER={lat:17.5192,lng:78.6298}; // Cheeriyal demo center — fixed for the entire demo
-let state={ambulances:[],bookings:[],mapAmbulances:[],hospitals:[]};
+let state={ambulances:[],bookings:[],mapAmbulances:[],hospitals:[],bloodRequests:[],bloodProviders:[]};
 let role=null,bookingId=null,map=null,markers=[],routeLine=null,userLocation={...FALLBACK_USER};
+let hospitalBookingId=null,hospitalAmbMarker=null,hospitalMap=null;
 const MAP_CENTER={lat:17.5192,lng:78.6298};
 const MAP_ZOOM=12;
 const $=s=>document.querySelector(s); const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg,red=false){const t=$('#toast');t.textContent=msg;t.className='toast'+(red?' red':'');clearTimeout(window.__t);window.__t=setTimeout(()=>t.className='toast hidden',3200);}
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});const text=await r.text();let data;try{data=JSON.parse(text)}catch{throw Error(`Server error (${r.status})`)}if(!r.ok)throw Error(data.error||'Request failed');return data;}
-function destroyMap(){if(map){map.remove();map=null}markers=[];userMarker=null;routeLine=null;mapMode=null;mapBookingId=null;mapAmbMarker=null;mapPatientMarker=null;mapHospitalMarker=null}
+function destroyMap(){if(map){map.remove();map=null}if(hospitalMap){hospitalMap.remove();hospitalMap=null}markers=[];userMarker=null;routeLine=null;mapMode=null;mapBookingId=null;mapAmbMarker=null;mapPatientMarker=null;mapHospitalMarker=null;hospitalAmbMarker=null}
 function makeMap(id){destroyMap();const el=$('#'+id);if(!el)return null;map=L.map(el,{zoomControl:true,scrollWheelZoom:true,dragging:true,zoomSnap:0.5}).setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);mapMode=id;return map}
 function ambIcon(sel=false){return L.divIcon({className:'amb-marker'+(sel?' selected':''),html:'<span>🚑</span>',iconSize:[40,40],iconAnchor:[20,20]})}
 function userIcon(){return L.divIcon({className:'you-marker',html:'<span>●</span>',iconSize:[30,30],iconAnchor:[15,15]})}
@@ -18,7 +19,7 @@ function drawTripMap(b,host){const id=host?'captainMap':'userMap',m=makeMap(id);
   const pm=L.marker([patient.lat,patient.lng],{icon:userIcon(),interactive:false}).bindPopup('<b>📍 PATIENT</b>').addTo(m);userMarker=pm;
   const am=L.marker([amb.lat,amb.lng],{icon:ambIcon(true),interactive:false}).bindPopup(`<b>${esc(b.ambulanceNumber)}</b><br>${esc(b.captain)}`).addTo(m);mapAmbMarker=am;markers.push(am);
   let dest=null;if(['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED'].includes(b.status))dest=patient;if(b.status==='GOING_TO_HOSPITAL'&&b.hospitalLat!=null)dest={lat:b.hospitalLat,lng:b.hospitalLng};
-  if(dest){routeLine=L.polyline([[b.lat,b.lng],[dest.lat,dest.lng]],{color:'#079447',weight:5,opacity:.9}).addTo(m);}
+  if(dest){const pts=(b.routePath&&b.routePath.length)?b.routePath:[[b.lat,b.lng],[dest.lat,dest.lng]];routeLine=L.polyline(pts,{color:'#079447',weight:5,opacity:.9}).addTo(m);}
   if(b.hospitalLat!=null&&b.status==='GOING_TO_HOSPITAL'){mapHospitalMarker=L.marker([b.hospitalLat,b.hospitalLng],{icon:hospitalIcon(),interactive:false}).bindPopup(`<b>${esc(b.hospitalName||'DEMO HOSPITAL')}</b>`).addTo(m);}
   // IMPORTANT: never fit/re-center the map during a trip. The map stays fixed on Cheeriyal; only the ambulance marker moves.
   updateTrackingDistance(b);
@@ -34,9 +35,63 @@ async function bookNow(){const btn=$('#bookBtn');btn.disabled=true;btn.textConte
 async function locateUser(){userLocation={...MAP_CENTER};map?.setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM,{animate:false});toast('Demo location: Cheeriyal')}
 function renderCaptain(){const v=$('#captainView'),active=state.bookings.find(b=>b.status!=='COMPLETED');if(!active){v.innerHTML=`<div class="title-row"><div><small>CAPTAIN / AMBULANCE DRIVER</small><h2>Captain dashboard</h2></div><span class="live">● LIVE NETWORK</span></div><div class="card empty-card"><div class="big-emoji">🚑</div><h3>Waiting for a demo request</h3><p>Book from the User device.</p></div>`;return}let action='';if(active.status==='REQUESTED')action='<div class="button-row"><button id="acceptBtn" class="book-btn">ACCEPT REQUEST</button><button id="declineBtn" class="secondary-btn">DECLINE / NEXT CAPTAIN</button></div>';if(active.status==='CAPTAIN_ACCEPTED')action='<button id="startBtn" class="book-btn">START TRIP</button>';if(active.status==='ARRIVED')action='<button id="pickupBtn" class="book-btn">PICK UP PATIENT</button>';if(active.status==='PATIENT_PICKED_UP')action='<div class="hospital-pick"><h3>SELECT NEARBY HOSPITAL</h3><p>Choose a demo hospital. The ambulance will move there automatically.</p><div id="hospitalList"></div></div>';if(active.status==='ARRIVED_AT_HOSPITAL')action='<button id="closeBtn" class="book-btn">COMPLETE TRIP</button>';v.innerHTML=`<div class="title-row"><div><small>CAPTAIN / AMBULANCE DRIVER</small><h2>Captain dashboard</h2></div><span class="live">● LIVE NETWORK</span></div><div class="map-card"><div class="map-title">LIVE CAPTAIN / AMBULANCE MAP <span>${esc(active.status.replaceAll('_',' '))}</span></div><div id="captainMap" class="map big"></div></div><div class="card"><div class="status-line"><b>${esc(active.ambulanceNumber)}</b><span class="badge">${esc(active.status.replaceAll('_',' '))}</span></div><p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p>${active.hospitalName?`<p><b>Hospital:</b> ${esc(active.hospitalName)}</p>`:''}${action}</div><div class="card tracking-card"><div class="status-line"><b>LIVE TRACKING</b><span class="badge" data-track-eta>-- min</span></div><p><b>Distance to patient:</b> <span data-track-distance>-- km</span></p><p class="track-note">🚑 Only the ambulance marker moves; the map stays fixed.</p></div>`;renderMap([],active,true);if(active.status==='REQUESTED'){$('#acceptBtn').onclick=()=>api(`/api/bookings/${active.id}/accept`,{method:'POST'});$('#declineBtn').onclick=()=>api(`/api/bookings/${active.id}/decline`,{method:'POST'})}if(active.status==='CAPTAIN_ACCEPTED')$('#startBtn').onclick=()=>api(`/api/bookings/${active.id}/start`,{method:'POST'});if(active.status==='ARRIVED')$('#pickupBtn').onclick=()=>api(`/api/bookings/${active.id}/status`,{method:'POST',body:JSON.stringify({status:'PATIENT_PICKED_UP'})});if(active.status==='PATIENT_PICKED_UP')loadHospitals(active);if(active.status==='ARRIVED_AT_HOSPITAL')$('#closeBtn').onclick=()=>api(`/api/bookings/${active.id}/status`,{method:'POST',body:JSON.stringify({status:'COMPLETED'})})}
 async function loadHospitals(b){try{const hs=await api(`/api/hospitals?bookingId=${encodeURIComponent(b.id)}`);$('#hospitalList').innerHTML=hs.map(h=>`<button class="hospital-option" data-h="${h.id}"><span>🏥</span><span><b>${esc(h.name)}</b><small>${h.distance.toFixed(1)} km • ${h.eta} min</small></span><strong>SELECT</strong></button>`).join('');document.querySelectorAll('.hospital-option').forEach(x=>x.onclick=async()=>{x.disabled=true;try{await api(`/api/bookings/${b.id}/select-hospital`,{method:'POST',body:JSON.stringify({hospitalId:x.dataset.h})});toast('Hospital selected — ambulance is moving')}catch(e){toast(e.message,true)}})}catch(e){toast(e.message,true)}}
-function renderHospital(){const v=$('#hospitalView'),arr=state.bookings.filter(b=>b.status==='ARRIVED_AT_HOSPITAL'||b.status==='COMPLETED');v.innerHTML=`<div class="title-row"><div><small>AUTHORIZED STAFF ONLY</small><h2>Hospital dashboard</h2></div><span class="live">● LIVE NETWORK</span></div><div class="card"><h3>AMBULANCE ARRIVALS</h3>${arr.length?arr.map(b=>`<div class="history"><b>🚑 ${esc(b.ambulanceNumber)}</b><span>${esc(b.captain)}</span><span>${esc(b.status.replaceAll('_',' '))}</span></div>`).join(''):'<div class="empty">No ambulance arrivals yet.</div>'}</div>`}
+function renderHospital(){
+  const v=$('#hospitalView');
+  const active=state.bookings.find(b=>['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL'].includes(b.status));
+  const arr=state.bookings.filter(b=>b.status==='ARRIVED_AT_HOSPITAL'||b.status==='COMPLETED');
+  const incoming=state.bloodRequests||[];
+  const pending=incoming.filter(r=>r.status==='REQUEST_SENT');
+  const accepted=incoming.filter(r=>r.status==='ACCEPTED');
+  v.innerHTML=`
+  <div class="title-row"><div><small>AUTHORIZED STAFF ONLY</small><h2>Hospital dashboard</h2></div><span class="live">● LIVE NETWORK</span></div>
+  <div class="card hospital-arrivals-card"><div class="status-line"><h3 style="margin:0">🚑 AMBULANCE ARRIVALS</h3><span class="badge">${active?'LIVE TRACKING':'HISTORY'}</span></div>
+    ${active?`<div class="arrival-map-wrap"><div id="hospitalMap" class="map big"></div></div>
+      <div class="arrival-info"><div class="status-line"><b>${esc(active.ambulanceNumber)}</b><span class="badge">${esc(active.status.replaceAll('_',' '))}</span></div>
+      <p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p><p><b>Captain → Patient:</b> <span data-hospital-distance>-- km</span></p><p><b>ETA:</b> <span data-hospital-eta>-- min</span></p></div>`:
+      '<div class="empty">No active ambulance trip. Ambulance arrivals will appear here with live captain tracking.</div>'}
+    <div class="arrival-history">${arr.length?arr.map(b=>`<div class="history"><b>🚑 ${esc(b.ambulanceNumber)}</b><span>${esc(b.captain)}</span><span>${esc(b.status.replaceAll('_',' '))}</span></div>`).join(''):'<div class="empty">No completed arrivals yet.</div>'}</div>
+  </div>
+  <div class="card blood-dashboard">
+    <div class="status-line"><h3 style="margin:0">🩸 BLOOD EMERGENCY</h3><span class="badge blood-badge">DEMO NETWORK</span></div>
+    <div class="blood-section"><h4>🩸 REQUEST BLOOD</h4><p>Send a fictional emergency blood request to a nearby demo blood provider.</p>
+      <div class="blood-form"><label>GROUP<select id="bloodGroup"><option>O+</option><option>O-</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option></select></label><label>UNITS<input id="bloodUnits" type="number" min="1" value="2"></label><label>URGENCY<select id="bloodUrgency"><option>CRITICAL</option><option>URGENT</option><option>NORMAL</option></select></label></div>
+      <button id="bloodRequestBtn" class="book-btn blood-btn">SEND BLOOD REQUEST</button>
+    </div>
+    <div class="blood-section"><div class="status-line"><h4>🩸 INCOMING BLOOD REQUESTS</h4><span class="badge">${pending.length} PENDING</span></div>
+      ${pending.length?pending.map(r=>`<div class="blood-request"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.providerName)} • ${esc(r.urgency)}</small></div><div class="button-row"><button class="book-btn blood-accept" data-blood-id="${r.id}">ACCEPT BLOOD</button><button class="secondary-btn blood-reject" data-blood-id="${r.id}">NOT AVAILABLE</button></div></div>`).join(''):'<div class="empty">No pending blood requests.</div>'}
+      ${accepted.length?`<div class="accepted-blood"><b>✓ Accepted blood requests</b>${accepted.map(r=>`<div>${esc(r.bloodGroup)} • ${r.unitsRequired} units — ${esc(r.providerName)}</div>`).join('')}</div>`:''}
+    </div>
+  </div>`;
+  if(active){hospitalBookingId=active.id;renderHospitalMap(active);updateHospitalTracking(active)} else {hospitalBookingId=null;hospitalMap=null;}
+  $('#bloodRequestBtn').onclick=sendBloodRequest;
+  document.querySelectorAll('.blood-accept').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,true));
+  document.querySelectorAll('.blood-reject').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,false));
+}
+function renderHospitalMap(b){
+  const el=$('#hospitalMap'); if(!el)return;
+  if(hospitalMap){hospitalMap.remove();hospitalMap=null;}
+  hospitalMap=L.map(el,{zoomControl:true,scrollWheelZoom:true,dragging:true,zoomSnap:0.5}).setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(hospitalMap);
+  L.marker([b.userLat,b.userLng],{icon:userIcon(),interactive:false}).addTo(hospitalMap);
+  hospitalAmbMarker=L.marker([b.lat,b.lng],{icon:ambIcon(true),interactive:false}).addTo(hospitalMap);
+  const pts=(b.routePath&&b.routePath.length)?b.routePath:[[b.lat,b.lng],[b.userLat,b.userLng]];
+  L.polyline(pts,{color:'#079447',weight:5,opacity:.9}).addTo(hospitalMap);
+}
+function updateHospitalTracking(b){
+  if(!b)return;
+  if(hospitalAmbMarker)hospitalAmbMarker.setLatLng([b.lat,b.lng]);
+  const d=kmBetween({lat:b.lat,lng:b.lng},{lat:b.userLat,lng:b.userLng});
+  document.querySelectorAll('[data-hospital-distance]').forEach(x=>x.textContent=`${d.toFixed(1)} km`);
+  document.querySelectorAll('[data-hospital-eta]').forEach(x=>x.textContent=`${Math.max(0,Math.ceil(d*2.1))} min`);
+}
+async function sendBloodRequest(){
+  const group=$('#bloodGroup')?.value||'O+',units=Number($('#bloodUnits')?.value||2),urgency=$('#bloodUrgency')?.value||'CRITICAL';
+  try{const r=await api('/api/blood-requests',{method:'POST',body:JSON.stringify({bloodGroup:group,units,urgency})});toast(`Blood request sent — ${r.providerName}`);}
+  catch(e){toast(e.message,true)}
+}
+async function respondBlood(id,accept){try{await api(`/api/blood-requests/${encodeURIComponent(id)}/respond`,{method:'POST',body:JSON.stringify({accept})});toast(accept?'Blood request accepted':'Blood request marked not available')}catch(e){toast(e.message,true)}}
 async function refresh(){try{state=await api(`/api/state?lat=${encodeURIComponent(userLocation.lat)}&lng=${encodeURIComponent(userLocation.lng)}`);if(role==='user')renderUser();if(role==='captain')renderCaptain();if(role==='hospital')renderHospital()}catch(e){toast(e.message,true)}}
-socket.on('state:update',s=>{const prev=currentBooking();state=s;const next=currentBooking();if((role==='user'||role==='captain')&&next&&prev&&next.id===prev.id&&next.status===prev.status){updateTripMap(next,role==='captain');updateTrackingDistance(next);const badge=document.querySelector('.map-title span');if(badge)badge.textContent=next.status.replaceAll('_',' ');return}if(role==='user')renderUser();if(role==='captain')renderCaptain();if(role==='hospital')renderHospital()});
+socket.on('state:update',s=>{const prev=currentBooking();const prevHospital=hospitalBookingId?state.bookings.find(b=>b.id===hospitalBookingId):null;state=s;const next=currentBooking();const nextHospital=hospitalBookingId?state.bookings.find(b=>b.id===hospitalBookingId):null;if((role==='user'||role==='captain')&&next&&prev&&next.id===prev.id&&next.status===prev.status){updateTripMap(next,role==='captain');updateTrackingDistance(next);const badge=document.querySelector('.map-title span');if(badge)badge.textContent=next.status.replaceAll('_',' ');return}if(role==='hospital'&&nextHospital&&prevHospital&&nextHospital.id===prevHospital.id&&nextHospital.status===prevHospital.status){updateHospitalTracking(nextHospital);return}if(role==='user')renderUser();if(role==='captain')renderCaptain();if(role==='hospital')renderHospital()});
 document.querySelectorAll('[data-role]').forEach(b=>b.onclick=()=>showRole(b.dataset.role));$('#backBtn').onclick=goHome;$('#resetBtn').onclick=async()=>{userLocation={...MAP_CENTER};await api('/api/reset',{method:'POST'});bookingId=null;refresh();toast('Demo reset — Cheeriyal restored')};
 // DEMO MODE intentionally does NOT use browser GPS. Cheeriyal is the fixed patient/demo center.
 userLocation={...MAP_CENTER};

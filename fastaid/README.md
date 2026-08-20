@@ -1,24 +1,16 @@
-# FastAid Demo v27 — Fixed Cheeriyal Map + Moving Ambulance Only
+# FastAid Demo v28 — Hospital Arrivals + Blood Emergency + Static Live Tracking
 
-Demo-only prototype. No real ambulance search is used.
+Demo-only FastAid prototype using fictional data.
 
-## Exact map behavior
-- Cheeriyal is the fixed demo/patient center: **17.5192, 78.6298**.
-- Browser GPS is intentionally disabled in Demo Mode.
-- The map center and zoom are fixed; no `fitBounds()` or automatic re-centering is used during a trip.
-- During Captain → Patient and Patient → Hospital movement, **only the ambulance marker changes position**.
-- Patient/Cheeriyal marker remains fixed.
-- Route line remains on the originally selected trip path.
-- Live Captain → Patient distance/ETA updates without rebuilding the map.
-
-## Demo dispatch
-- 20 fictional ambulances are generated in 0–5, 5–10, 10–15 and 15–20 km bands around Cheeriyal.
-- BOOK NOW sends to the nearest available fictional captain.
-- If the captain does not accept, the next nearest captain is requested.
-- Captain ACCEPT → START TRIP → ambulance moves to Cheeriyal.
-- PICK UP PATIENT → choose a fictional nearby hospital → ambulance moves to that hospital.
-
-Run with `npm install` then `npm start`.
-
-
-UI privacy fix: patient coordinates are never displayed in the user-facing or captain-facing interface. The demo still uses fixed Cheeriyal coordinates internally only for map rendering and distance calculations.
+## v28 changes
+- Hospital Dashboard keeps **AMBULANCE ARRIVALS** visible.
+- Hospital Dashboard includes two blood-emergency workflows:
+  - **REQUEST BLOOD** — send a fictional emergency blood request.
+  - **INCOMING BLOOD REQUESTS** — ACCEPT BLOOD / NOT AVAILABLE.
+- Hospital ambulance-arrival card includes live captain/ambulance tracking, distance in km and ETA.
+- During movement the Leaflet map is **never re-centered or rebuilt** on each position update.
+- Only the ambulance marker moves along a fixed multi-point demo route.
+- Patient/Cheeriyal marker stays fixed.
+- Hospital tracking uses the same static-map behavior.
+- Coordinates remain internal demo data and are not displayed in the UI.
+- No real ambulance, captain, hospital or blood-provider data is used.
