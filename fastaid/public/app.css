@@ -54,3 +54,6 @@ button{font:inherit;cursor:pointer}
 .hospital-interface{display:block}
 .hospital-interface.hidden{display:none!important}
 @media(max-width:360px){.hospital-tab{font-size:15px}.hospital-tab span{font-size:7px}}
+
+/* Final polish: smooth GPS-like marker motion without moving/blinking the map */
+.amb-marker span{will-change:transform}.captain-details-card{border-left:4px solid #079447}.blood-form{display:grid;grid-template-columns:1fr 1fr 1.25fr;gap:10px;align-items:end}.blood-form label{display:flex;flex-direction:column;gap:5px;font-size:10px;font-weight:900;color:#4d675f}.blood-form select,.blood-form input{width:100%;min-width:0;border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 8px;color:var(--dark);font:inherit;font-size:12px}.blood-form label+label{margin-left:0}
