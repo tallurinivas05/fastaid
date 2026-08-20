@@ -2,14 +2,14 @@ const socket=io();
 const FALLBACK_USER={lat:17.5192,lng:78.6298}; // Cheeriyal demo center — fixed for the entire demo
 let state={ambulances:[],bookings:[],mapAmbulances:[],hospitals:[],bloodRequests:[],bloodProviders:[]};
 let role=null,bookingId=null,map=null,markers=[],routeLine=null,userLocation={...FALLBACK_USER};
-let hospitalBookingId=null,hospitalAmbMarker=null,hospitalMap=null;
+let hospitalBookingId=null,hospitalAmbMarker=null,hospitalMap=null,selectedBloodProviderId=null;
 const MAP_CENTER={lat:17.5192,lng:78.6298};
 const MAP_ZOOM=12;
 const $=s=>document.querySelector(s); const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg,red=false){const t=$('#toast');t.textContent=msg;t.className='toast'+(red?' red':'');clearTimeout(window.__t);window.__t=setTimeout(()=>t.className='toast hidden',3200);}
 async function api(url,opt={}){const r=await fetch(url,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});const text=await r.text();let data;try{data=JSON.parse(text)}catch{throw Error(`Server error (${r.status})`)}if(!r.ok)throw Error(data.error||'Request failed');return data;}
 function destroyMap(){if(map){map.remove();map=null}if(hospitalMap){hospitalMap.remove();hospitalMap=null}markers=[];userMarker=null;routeLine=null;mapMode=null;mapBookingId=null;mapAmbMarker=null;mapPatientMarker=null;mapHospitalMarker=null;hospitalAmbMarker=null}
-function makeMap(id){destroyMap();const el=$('#'+id);if(!el)return null;map=L.map(el,{zoomControl:true,scrollWheelZoom:true,dragging:true,zoomSnap:0.5}).setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);mapMode=id;return map}
+function makeMap(id){destroyMap();const el=$('#'+id);if(!el)return null;map=L.map(el,{zoomControl:true,scrollWheelZoom:false,dragging:false,doubleClickZoom:false,boxZoom:false,keyboard:false,touchZoom:false,zoomSnap:0.5}).setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);mapMode=id;return map}
 function ambIcon(sel=false){return L.divIcon({className:'amb-marker'+(sel?' selected':''),html:'<span>🚑</span>',iconSize:[40,40],iconAnchor:[20,20]})}
 function userIcon(){return L.divIcon({className:'you-marker',html:'<span>●</span>',iconSize:[30,30],iconAnchor:[15,15]})}
 function hospitalIcon(){return L.divIcon({className:'hospital-marker',html:'<span>🏥</span>',iconSize:[40,40],iconAnchor:[20,20]})}
@@ -37,57 +37,86 @@ function renderCaptain(){const v=$('#captainView'),active=state.bookings.find(b=
 async function loadHospitals(b){try{const hs=await api(`/api/hospitals?bookingId=${encodeURIComponent(b.id)}`);$('#hospitalList').innerHTML=hs.map(h=>`<button class="hospital-option" data-h="${h.id}"><span>🏥</span><span><b>${esc(h.name)}</b><small>${h.distance.toFixed(1)} km • ${h.eta} min</small></span><strong>SELECT</strong></button>`).join('');document.querySelectorAll('.hospital-option').forEach(x=>x.onclick=async()=>{x.disabled=true;try{await api(`/api/bookings/${b.id}/select-hospital`,{method:'POST',body:JSON.stringify({hospitalId:x.dataset.h})});toast('Hospital selected — ambulance is moving')}catch(e){toast(e.message,true)}})}catch(e){toast(e.message,true)}}
 function renderHospital(){
   const v=$('#hospitalView');
-  const active=state.bookings.find(b=>['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL'].includes(b.status));
-  const arr=state.bookings.filter(b=>b.status==='ARRIVED_AT_HOSPITAL'||b.status==='COMPLETED');
-  const incoming=state.bloodRequests||[];
-  const pending=incoming.filter(r=>r.status==='REQUEST_SENT');
-  const accepted=incoming.filter(r=>r.status==='ACCEPTED');
+  const active=state.bookings.find(b=>['GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL'].includes(b.status));
+  const completed=state.bookings.filter(b=>b.status==='COMPLETED');
+  const requests=state.bloodRequests||[];
+  const outgoing=requests.filter(r=>r.direction==='OUTGOING');
+  const incoming=requests.filter(r=>r.direction==='INCOMING'&&r.status==='REQUEST_SENT');
+  const acceptedIncoming=requests.filter(r=>r.direction==='INCOMING'&&r.status==='ACCEPTED');
   v.innerHTML=`
   <div class="title-row"><div><small>AUTHORIZED STAFF ONLY</small><h2>Hospital dashboard</h2></div><span class="live">● LIVE NETWORK</span></div>
-  <div class="card hospital-arrivals-card"><div class="status-line"><h3 style="margin:0">🚑 AMBULANCE ARRIVALS</h3><span class="badge">${active?'LIVE TRACKING':'HISTORY'}</span></div>
+
+  <div class="card hospital-arrivals-card">
+    <div class="status-line"><h3 style="margin:0">🚑 AMBULANCE ARRIVALS</h3><span class="badge">${active?'LIVE ARRIVAL':'READY'}</span></div>
     ${active?`<div class="arrival-map-wrap"><div id="hospitalMap" class="map big"></div></div>
       <div class="arrival-info"><div class="status-line"><b>${esc(active.ambulanceNumber)}</b><span class="badge">${esc(active.status.replaceAll('_',' '))}</span></div>
-      <p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p><p><b>Captain → Patient:</b> <span data-hospital-distance>-- km</span></p><p><b>ETA:</b> <span data-hospital-eta>-- min</span></p></div>`:
-      '<div class="empty">No active ambulance trip. Ambulance arrivals will appear here with live captain tracking.</div>'}
-    <div class="arrival-history">${arr.length?arr.map(b=>`<div class="history"><b>🚑 ${esc(b.ambulanceNumber)}</b><span>${esc(b.captain)}</span><span>${esc(b.status.replaceAll('_',' '))}</span></div>`).join(''):'<div class="empty">No completed arrivals yet.</div>'}</div>
+      <p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p><p><b>Hospital:</b> ${esc(active.hospitalName||'Selected hospital')}</p><p><b>Captain → Hospital:</b> <span data-hospital-distance>-- km</span></p><p><b>ETA:</b> <span data-hospital-eta>-- min</span></p><p class="track-note">🚑 Live route: only the ambulance marker moves. The map viewport stays fixed.</p></div>`:
+      '<div class="empty">No ambulance is currently on the way to the hospital. Arrivals appear here after a captain accepts the trip and a hospital is selected.</div>'}
+    ${completed.length?`<div class="arrival-history"><h4>ARRIVAL HISTORY</h4>${completed.map(b=>`<div class="history"><b>🚑 ${esc(b.ambulanceNumber)}</b><span>${esc(b.captain)}</span><span>COMPLETED</span></div>`).join('')}</div>`:''}
   </div>
-  <div class="card blood-dashboard">
-    <div class="status-line"><h3 style="margin:0">🩸 BLOOD EMERGENCY</h3><span class="badge blood-badge">DEMO NETWORK</span></div>
-    <div class="blood-section"><h4>🩸 REQUEST BLOOD</h4><p>Send a fictional emergency blood request to a nearby demo blood provider.</p>
-      <div class="blood-form"><label>GROUP<select id="bloodGroup"><option>O+</option><option>O-</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option></select></label><label>UNITS<input id="bloodUnits" type="number" min="1" value="2"></label><label>URGENCY<select id="bloodUrgency"><option>CRITICAL</option><option>URGENT</option><option>NORMAL</option></select></label></div>
-      <button id="bloodRequestBtn" class="book-btn blood-btn">SEND BLOOD REQUEST</button>
-    </div>
-    <div class="blood-section"><div class="status-line"><h4>🩸 INCOMING BLOOD REQUESTS</h4><span class="badge">${pending.length} PENDING</span></div>
-      ${pending.length?pending.map(r=>`<div class="blood-request"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.providerName)} • ${esc(r.urgency)}</small></div><div class="button-row"><button class="book-btn blood-accept" data-blood-id="${r.id}">ACCEPT BLOOD</button><button class="secondary-btn blood-reject" data-blood-id="${r.id}">NOT AVAILABLE</button></div></div>`).join(''):'<div class="empty">No pending blood requests.</div>'}
-      ${accepted.length?`<div class="accepted-blood"><b>✓ Accepted blood requests</b>${accepted.map(r=>`<div>${esc(r.bloodGroup)} • ${r.unitsRequired} units — ${esc(r.providerName)}</div>`).join('')}</div>`:''}
-    </div>
+
+  <div class="card blood-dashboard blood-request-interface">
+    <div class="status-line"><h3 style="margin:0">🩸 BLOOD EMERGENCY REQUEST</h3><span class="badge blood-badge">1 / 3</span></div>
+    <p class="sub">Choose a nearby demo blood bank, select the required blood group and send an emergency request.</p>
+    <div class="blood-form"><label>GROUP<select id="bloodGroup"><option>O+</option><option>O-</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option></select></label><label>UNITS<input id="bloodUnits" type="number" min="1" value="2"></label><label>URGENCY<select id="bloodUrgency"><option>CRITICAL</option><option>URGENT</option><option>NORMAL</option></select></label></div>
+    <h4 class="blood-subhead">NEARBY AVAILABLE BLOOD BANKS</h4>
+    <div id="bloodProvidersList" class="blood-provider-list"><div class="empty">Loading nearby demo blood banks…</div></div>
+    <button id="bloodRequestBtn" class="book-btn blood-btn">SEND BLOOD REQUEST</button>
+    ${outgoing.length?`<div class="sent-blood-list"><h4>SENT REQUESTS</h4>${outgoing.slice(-4).reverse().map(r=>`<div class="blood-request"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.providerName)} • ${esc(r.urgency)}</small></div><span class="badge">${esc(r.status.replaceAll('_',' '))}</span></div>`).join('')}</div>`:''}
+  </div>
+
+  <div class="card blood-dashboard blood-accept-interface">
+    <div class="status-line"><h3 style="margin:0">🩸 BLOOD REQUEST ACCEPTS</h3><span class="badge blood-badge">2 / 3</span></div>
+    <p class="sub">Incoming demo hospitals can request blood from this hospital. Accept or mark unavailable here.</p>
+    ${incoming.length?incoming.map(r=>`<div class="blood-request incoming-blood"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.requestingHospitalName)} • ${esc(r.urgency)}</small></div><div class="button-row"><button class="book-btn blood-accept" data-blood-id="${r.id}">ACCEPT BLOOD</button><button class="secondary-btn blood-reject" data-blood-id="${r.id}">NOT AVAILABLE</button></div></div>`).join(''):'<div class="empty">No pending incoming blood requests.</div>'}
+    ${acceptedIncoming.length?`<div class="accepted-blood"><h4>ACCEPTED BLOOD REQUESTS</h4>${acceptedIncoming.map(r=>`<div class="blood-history-row"><b>✓ ${esc(r.bloodGroup)} • ${r.unitsRequired} units</b><span>${esc(r.requestingHospitalName)}</span><span>ACCEPTED</span></div>`).join('')}</div>`:''}
   </div>`;
-  if(active){hospitalBookingId=active.id;renderHospitalMap(active);updateHospitalTracking(active)} else {hospitalBookingId=null;hospitalMap=null;}
+
+  if(active){hospitalBookingId=active.id;renderHospitalMap(active);updateHospitalTracking(active)} else {hospitalBookingId=null;if(hospitalMap){hospitalMap.remove();hospitalMap=null}hospitalAmbMarker=null;}
+  loadBloodProviders($('#bloodGroup')?.value||'O+');
+  $('#bloodGroup').onchange=()=>loadBloodProviders($('#bloodGroup').value);
   $('#bloodRequestBtn').onclick=sendBloodRequest;
   document.querySelectorAll('.blood-accept').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,true));
   document.querySelectorAll('.blood-reject').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,false));
 }
+async function loadBloodProviders(group){
+  const box=$('#bloodProvidersList'); if(!box)return;
+  try{
+    const providers=await api(`/api/blood/providers?group=${encodeURIComponent(group)}`);
+    const available=providers.filter(p=>p.units>0);
+    if(!available.length){box.innerHTML='<div class="empty">No demo blood bank has this group right now.</div>';selectedBloodProviderId=null;return;}
+    if(!selectedBloodProviderId||!available.some(p=>p.id===selectedBloodProviderId))selectedBloodProviderId=available[0].id;
+    box.innerHTML=available.map(p=>`<button class="blood-provider ${p.id===selectedBloodProviderId?'chosen':''}" data-provider-id="${p.id}"><span class="blood-drop">🩸</span><span class="grow"><b>${esc(p.name)}</b><small>${p.distance.toFixed(1)} km • ${p.units} units available</small></span><strong>${p.id===selectedBloodProviderId?'SELECTED':'SELECT'}</strong></button>`).join('');
+    document.querySelectorAll('.blood-provider').forEach(x=>x.onclick=()=>{selectedBloodProviderId=x.dataset.providerId;loadBloodProviders($('#bloodGroup').value)});
+  }catch(e){box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+}
 function renderHospitalMap(b){
   const el=$('#hospitalMap'); if(!el)return;
   if(hospitalMap){hospitalMap.remove();hospitalMap=null;}
-  hospitalMap=L.map(el,{zoomControl:true,scrollWheelZoom:true,dragging:true,zoomSnap:0.5}).setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM);
+  hospitalMap=L.map(el,{zoomControl:true,scrollWheelZoom:false,dragging:false,doubleClickZoom:false,boxZoom:false,keyboard:false,touchZoom:false,zoomSnap:0.5}).setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(hospitalMap);
   L.marker([b.userLat,b.userLng],{icon:userIcon(),interactive:false}).addTo(hospitalMap);
   hospitalAmbMarker=L.marker([b.lat,b.lng],{icon:ambIcon(true),interactive:false}).addTo(hospitalMap);
-  const pts=(b.routePath&&b.routePath.length)?b.routePath:[[b.lat,b.lng],[b.userLat,b.userLng]];
+  if(b.hospitalLat!=null){
+    L.marker([b.hospitalLat,b.hospitalLng],{icon:hospitalIcon(),interactive:false}).addTo(hospitalMap);
+  }
+  const pts=(b.routePath&&b.routePath.length)?b.routePath:[[b.lat,b.lng],[b.hospitalLat??b.userLat,b.hospitalLng??b.userLng]];
   L.polyline(pts,{color:'#079447',weight:5,opacity:.9}).addTo(hospitalMap);
 }
 function updateHospitalTracking(b){
   if(!b)return;
   if(hospitalAmbMarker)hospitalAmbMarker.setLatLng([b.lat,b.lng]);
-  const d=kmBetween({lat:b.lat,lng:b.lng},{lat:b.userLat,lng:b.userLng});
+  const dest={lat:b.hospitalLat??b.userLat,lng:b.hospitalLng??b.userLng};
+  const d=kmBetween({lat:b.lat,lng:b.lng},dest);
   document.querySelectorAll('[data-hospital-distance]').forEach(x=>x.textContent=`${d.toFixed(1)} km`);
   document.querySelectorAll('[data-hospital-eta]').forEach(x=>x.textContent=`${Math.max(0,Math.ceil(d*2.1))} min`);
 }
 async function sendBloodRequest(){
   const group=$('#bloodGroup')?.value||'O+',units=Number($('#bloodUnits')?.value||2),urgency=$('#bloodUrgency')?.value||'CRITICAL';
-  try{const r=await api('/api/blood-requests',{method:'POST',body:JSON.stringify({bloodGroup:group,units,urgency})});toast(`Blood request sent — ${r.providerName}`);}
-  catch(e){toast(e.message,true)}
+  try{
+    const r=await api('/api/blood-requests',{method:'POST',body:JSON.stringify({bloodGroup:group,units,urgency,providerId:selectedBloodProviderId})});
+    toast(`Blood request sent to ${r.providerName}`);selectedBloodProviderId=r.providerId;refresh();
+  }catch(e){toast(e.message,true)}
 }
 async function respondBlood(id,accept){try{await api(`/api/blood-requests/${encodeURIComponent(id)}/respond`,{method:'POST',body:JSON.stringify({accept})});toast(accept?'Blood request accepted':'Blood request marked not available')}catch(e){toast(e.message,true)}}
 async function refresh(){try{state=await api(`/api/state?lat=${encodeURIComponent(userLocation.lat)}&lng=${encodeURIComponent(userLocation.lng)}`);if(role==='user')renderUser();if(role==='captain')renderCaptain();if(role==='hospital')renderHospital()}catch(e){toast(e.message,true)}}
