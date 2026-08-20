@@ -1,36 +1,52 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FastAid — Emergency Coordination Demo</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/style.css">
-<link rel="stylesheet" href="/mobile-app.css"></head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>FastAid — Smart Ambulance Demo</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
 <body>
-<header class="topbar">
-  <button class="brand-btn" id="brandHome" aria-label="FastAid home"><span class="brand-ambulance">🚑</span><strong>FAST<span>AID</span></strong><span class="brand-blood">🩸</span></button>
-  <button id="resetBtn" class="reset">Reset Demo</button>
-</header>
+  <div class="device">
+    <header class="topbar">
+      <div class="brand"><span>🚑</span><strong>FAST<span>AID</span></strong><span class="drop">💧</span></div>
+      <button id="resetBtn" class="reset">Reset Demo</button>
+    </header>
 
-<main id="home" class="home">
-  <div class="home-logo"><span>🚑</span><span>🩸</span></div>
-  <h1>FAST<span>AID</span></h1>
-  <p class="home-sub">Emergency coordination demo</p>
-  <div class="roles">
-    <button class="role-card" data-role="user"><span class="role-icon">👤</span><strong>USER</strong><small>Book & track an ambulance</small><span class="open-btn" aria-hidden="true">OPEN USER DASHBOARD</span></button>
-    <button class="role-card" data-role="captain"><span class="role-icon">🚑</span><strong>CAPTAIN</strong><small>Receive & manage emergency trips</small><span class="open-btn" aria-hidden="true">OPEN CAPTAIN DASHBOARD</span></button>
-    <button class="role-card" data-role="hospital"><span class="role-icon">🏥</span><strong>HOSPITAL</strong><small>Ambulance arrivals & blood coordination</small><span class="open-btn" aria-hidden="true">OPEN HOSPITAL DASHBOARD</span></button>
+    <main>
+      <section id="home" class="screen">
+        <div class="hero">
+          <div class="logo">🚑 💧</div>
+          <h1>FAST<span>AID</span></h1>
+          <p>Emergency coordination demo</p>
+          <div class="demo-pill">● DEMO MODE</div>
+        </div>
+        <div class="roles">
+          <button class="role" data-role="user"><div>👤</div><h2>USER</h2><p>Book & track an ambulance</p></button>
+          <button class="role" data-role="captain"><div>🚑</div><h2>CAPTAIN</h2><p>Receive & manage emergency trips</p></button>
+          <button class="role" data-role="hospital"><div>🏥</div><h2>HOSPITAL</h2><p>Ambulance arrivals</p></button>
+        </div>
+      </section>
+
+      <section id="app" class="screen hidden">
+        <div class="apphead">
+          <button id="backBtn" class="back">←</button>
+          <div class="brand small"><strong>FAST<span>AID</span></strong></div>
+          <div class="demo-pill">● DEMO</div>
+        </div>
+
+        <section id="userView" class="view hidden"></section>
+        <section id="captainView" class="view hidden"></section>
+        <section id="hospitalView" class="view hidden"></section>
+      </section>
+    </main>
   </div>
-</main>
 
-<main id="app" class="app hidden">
-  <div class="app-head"><button id="back" class="back">←</button><h2>FAST<span>AID</span></h2><span class="live-pill">● DEMO LIVE</span></div>
-  <section id="user" class="hidden"></section>
-  <section id="captain" class="hidden"></section>
-  <section id="hospital" class="hidden"></section>
-</main>
-<div id="toast" class="toast hidden"></div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/socket.io/socket.io.js"></script>
-<script src="/app.js"></script>
-</body></html>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
