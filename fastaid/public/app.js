@@ -1,6 +1,8 @@
 const socket = io();
 const CENTER = {lat:17.4065,lng:78.4772};
 const RADIUS = 5;
+const DEMO_USER = {...CENTER};
+const MAX_VISIBLE = 5;
 
 let state = {ambulances:[],bookings:[],nearby:[]};
 let role = null;
@@ -10,7 +12,7 @@ let map = null;
 let markers = [];
 let userMarker = null;
 let routeLine = null;
-let userLocation = {...CENTER};
+let userLocation = {...DEMO_USER};
 let autoTripTimer = null;
 
 const $ = s => document.querySelector(s);
@@ -115,12 +117,14 @@ function renderMap(nearby, booking=null){
 }
 
 function nearbyList(){
+  // Demo-only: do not search real ambulances. Sort the 20 fictional records
+  // by distance and always show the nearest 5 available ones. If none are
+  // inside 5 km, the nearest outside 5 km are used as fallback.
   return state.ambulances
     .filter(a=>a.online&&a.status==='AVAILABLE')
-    .map(a=>({...a,distance:dist(userLocation,a)}))
-    .filter(a=>a.distance<=RADIUS)
+    .map(a=>({...a,distance:dist(DEMO_USER,a)}))
     .sort((a,b)=>a.distance-b.distance)
-    .slice(0,5);
+    .slice(0,MAX_VISIBLE);
 }
 
 function booking(){
@@ -152,12 +156,12 @@ function renderUser(){
     <div class="map-card">
       <div class="map-title">LIVE AMBULANCE MAP <button id="locateBtn" class="light-btn">My Location</button></div>
       <div id="userMap" class="map big"></div>
-      <div class="map-note">Only nearby AVAILABLE ambulances within 5 km are shown.</div>
+      <div class="map-note">Nearest 5 DEMO ambulances are shown. If none are within 5 km, the next nearest are shown.</div>
     </div>
     <div class="sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-head"><h3>AMBULANCES NEAR YOU</h3><span>${near.length} shown</span></div>
-      <div class="sub">20 demo ambulances exist in the system • only 3–6 nearby ones are visible here.</div>
+      <div class="sub">20 fictional demo ambulances exist • only the nearest 5 AVAILABLE ones are shown.</div>
       <div class="amb-list">
         ${near.map(a=>`
           <button class="amb-card ${selectedAmb===a.id?'chosen':''}" data-id="${a.id}">
@@ -166,7 +170,7 @@ function renderUser(){
             <span class="select-tag">${selectedAmb===a.id?'SELECTED':'SELECT'}</span>
           </button>`).join('')}
       </div>
-      <button id="bookBtn" class="book-btn" ${selectedAmb?'':'disabled'}>BOOK AMBULANCE</button>
+      <button id="bookBtn" class="book-btn">BOOK AMBULANCE</button>
     </div>`;
 
   renderMap(near);
@@ -175,25 +179,24 @@ function renderUser(){
   });
   $('#bookBtn').onclick=bookSelected;
   $('#locateBtn').onclick=()=>{
-    if(navigator.geolocation){
-      navigator.geolocation.getCurrentPosition(p=>{
-        userLocation={lat:p.coords.latitude,lng:p.coords.longitude};
-        refresh();
-      },()=>toast('Using demo Hyderabad location'));
-    }
+    userLocation={...DEMO_USER};
+    refresh();
+    toast('Demo location restored');
   };
 }
 
 async function bookSelected(){
-  if(!selectedAmb)return toast('Select an ambulance first',true);
   try{
+    // BOOK AMBULANCE always sends the request to the nearest fictional ambulance.
+    // The server automatically moves to the next nearest captain if the first
+    // demo captain does not respond. Selection is optional in Demo Mode.
     const b=await api('/api/bookings',{method:'POST',body:JSON.stringify({
-      ambulanceId:selectedAmb,userLat:userLocation.lat,userLng:userLocation.lng
+      userLat:DEMO_USER.lat,userLng:DEMO_USER.lng,ambulanceId:selectedAmb||null
     })});
     bookingId=b.id;
     selectedAmb=null;
     renderUser();
-    toast('Request sent — demo captain will accept shortly');
+    toast('Request sent to the nearest demo captain');
   }catch(e){toast(e.message,true);}
 }
 
@@ -259,7 +262,8 @@ function renderHospital(){
 }
 
 function refresh(){
-  api(`/api/state?lat=${userLocation.lat}&lng=${userLocation.lng}`).then(s=>{
+  userLocation={...DEMO_USER};
+  api(`/api/state?lat=${DEMO_USER.lat}&lng=${DEMO_USER.lng}`).then(s=>{
     state=s;
     if(role==='user')renderUser();
     if(role==='captain')renderCaptain();
