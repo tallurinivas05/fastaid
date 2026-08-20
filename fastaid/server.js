@@ -3,73 +3,41 @@ const http=require('http');
 const path=require('path');
 const {Server}=require('socket.io');
 const app=express();
-const server=http.createServer(app);
-const io=new Server(server);
+const server=http.createServer(app); const io=new Server(server);
 const PORT=process.env.PORT||3000;
-
-// DEMO ONLY: every ambulance is fictional. No real ambulance search/API is used.
-const FALLBACK_USER={lat:17.5065,lng:78.6172}; // Cheeryal-area demo fallback
+const FALLBACK_USER={lat:17.5065,lng:78.6172};
 const BAND_DISTANCES=[1.4,2.3,3.4,4.6,6.3,7.5,8.7,9.6,11.4,12.6,13.8,14.7,16.4,17.6,18.5,19.6,2.0,5.0,10.0,15.0];
 const ANGLES=[15,95,165,235,305,40,120,200,280,330];
 const captains=['Aarav Demo','Vihaan Demo','Reyansh Demo','Advik Demo','Kabir Demo','Arjun Demo','Ishaan Demo','Rohan Demo','Neil Demo','Ayaan Demo','Dev Demo','Kian Demo','Ritvik Demo','Yuvan Demo','Dhruv Demo','Aadi Demo','Veer Demo','Samir Demo','Rudra Demo','Aarush Demo'];
 const types=['BLS','ALS','ICU','Neonatal','Cardiac'];
-function offset(center,km,deg){const a=deg*Math.PI/180;return {lat:center.lat+(km*Math.cos(a))/111,lng:center.lng+(km*Math.sin(a))/(111*Math.cos(center.lat*Math.PI/180))};}
+const hospitalNames=['Cheeryal Care Hospital','Keesara City Hospital','Medico Demo Hospital','Sunrise Emergency Hospital','Green Valley Hospital'];
+function offset(c,km,deg){const a=deg*Math.PI/180;return {lat:c.lat+(km*Math.cos(a))/111,lng:c.lng+(km*Math.sin(a))/(111*Math.cos(c.lat*Math.PI/180))};}
 function makeAmbulances(center){return BAND_DISTANCES.map((km,i)=>{const p=offset(center,km,ANGLES[i%ANGLES.length]);return {id:`AMB-${String(i+1).padStart(3,'0')}`,number:`FA-DEMO-${String(i+1).padStart(2,'0')}`,captainId:`CAP-${String(i+1).padStart(2,'0')}`,captain:captains[i],type:types[i%types.length],lat:p.lat,lng:p.lng,homeLat:p.lat,homeLng:p.lng,distanceBand:km<=5?'0–5 km':km<=10?'5–10 km':km<=15?'10–15 km':'15–20 km',online:true,status:'AVAILABLE',government:i===0,eta:Math.max(4,Math.round(km*1.7)),fare:800+i*120};});}
-const state={demoMode:true,demoUser:{...FALLBACK_USER},ambulances:makeAmbulances(FALLBACK_USER),bookings:[]};
-let seq=1000;
-const bookingTimers=new Map();
+function makeHospitals(center){const ds=[2.1,3.4,4.8,6.2,7.6],angs=[25,105,185,265,335];return ds.map((d,i)=>{const p=offset(center,d,angs[i]);return {id:`HOSP-${i+1}`,name:hospitalNames[i],lat:p.lat,lng:p.lng,distance:d,eta:Math.max(5,Math.round(d*2.2)),demo:true};});}
+const state={demoMode:true,demoUser:{...FALLBACK_USER},ambulances:makeAmbulances(FALLBACK_USER),bookings:[],hospitals:makeHospitals(FALLBACK_USER)};
+let seq=1000; const bookingTimers=new Map(); const movementTimers=new Map();
 app.use(express.json());app.use(express.static(path.join(__dirname,'public')));
-const clone=()=>JSON.parse(JSON.stringify(state));
-const broadcast=()=>io.emit('state:update',clone());
-function distanceKm(a,b){const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-a.lng)*Math.PI/180;const x=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+const clone=()=>JSON.parse(JSON.stringify(state)); const broadcast=()=>io.emit('state:update',clone());
+function distanceKm(a,b){const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-a.lng)*Math.PI/180,x=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
 function validCoord(lat,lng){return Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180;}
-function setDemoUser(lat,lng){state.demoUser={lat:Number(lat),lng:Number(lng)};state.ambulances=makeAmbulances(state.demoUser);}
+function setDemoUser(lat,lng){state.demoUser={lat:Number(lat),lng:Number(lng)};state.ambulances=makeAmbulances(state.demoUser);state.hospitals=makeHospitals(state.demoUser);}
 function rankedAvailable(){return state.ambulances.filter(a=>a.online&&a.status==='AVAILABLE').map(a=>({...a,distance:distanceKm(state.demoUser,a)})).sort((a,b)=>a.distance-b.distance);}
-function visibleAmbulances(){
-  const all=rankedAvailable();
-  // Clean map: 3 nearest within 0–5 km + one from each outer band. Never show all 20.
-  const picks=[];
-  const near=all.filter(a=>a.distanceBand==='0–5 km').slice(0,3);
-  picks.push(...near);
-  ['5–10 km','10–15 km','15–20 km'].forEach(b=>{const a=all.find(x=>x.distanceBand===b);if(a)picks.push(a);});
-  return picks.slice(0,6);
-}
-function resetDemo(){for(const t of bookingTimers.values())clearTimeout(t);bookingTimers.clear();state.ambulances=makeAmbulances(state.demoUser);state.bookings=[];}
-
-app.get('/api/state',(req,res)=>{
-  if(validCoord(req.query.lat,req.query.lng)&&state.bookings.length===0){setDemoUser(req.query.lat,req.query.lng);}
-  const snap=clone();snap.nearby=rankedAvailable().slice(0,5);snap.mapAmbulances=visibleAmbulances();snap.radiusKm=5;snap.fallbackEnabled=true;snap.note='Demo only: 20 fictional ambulances are arranged in 0–5, 5–10, 10–15 and 15–20 km bands. The map shows a small sample from every band; booking always dispatches to the nearest available captain.';res.json(snap);
-});
-app.post('/api/demo-location',(req,res)=>{if(!validCoord(req.body.lat,req.body.lng))return res.status(400).json({error:'Invalid location'});if(state.bookings.length===0){setDemoUser(req.body.lat,req.body.lng);broadcast();}res.json({ok:true,location:state.demoUser});});
+function visibleAmbulances(){const all=rankedAvailable(),picks=[];picks.push(...all.filter(a=>a.distanceBand==='0–5 km').slice(0,3));['5–10 km','10–15 km','15–20 km'].forEach(b=>{const a=all.find(x=>x.distanceBand===b);if(a)picks.push(a);});return picks.slice(0,6);}
+function resetDemo(){for(const t of bookingTimers.values())clearTimeout(t);for(const t of movementTimers.values())clearInterval(t);bookingTimers.clear();movementTimers.clear();state.ambulances=makeAmbulances(state.demoUser);state.hospitals=makeHospitals(state.demoUser);state.bookings=[];}
+app.get('/api/state',(req,res)=>{if(validCoord(req.query.lat,req.query.lng)&&state.bookings.length===0)setDemoUser(req.query.lat,req.query.lng);const snap=clone();snap.nearby=rankedAvailable().slice(0,5);snap.mapAmbulances=visibleAmbulances();snap.radiusKm=5;snap.hospitals=state.hospitals;snap.note='Demo only: 20 fictional ambulances in four distance bands. Booking dispatches nearest available captain; no real ambulance search is used.';res.json(snap);});
+app.post('/api/demo-location',(req,res)=>{if(!validCoord(req.body.lat,req.body.lng))return res.status(400).json({error:'Invalid location'});if(state.bookings.length===0)setDemoUser(req.body.lat,req.body.lng);broadcast();res.json({ok:true,location:state.demoUser});});
 app.post('/api/reset',(req,res)=>{resetDemo();broadcast();res.json({ok:true});});
-
-function requestCandidate(booking){
-  if(!booking||booking.status!=='REQUESTED')return;
-  const candidate=state.ambulances.find(a=>a.id===booking.candidateIds[booking.candidateIndex]);
-  if(!candidate){booking.candidateIndex=0;return requestCandidate(booking);}
-  booking.ambulanceId=candidate.id;booking.captainId=candidate.captainId;booking.captain=candidate.captain;booking.ambulanceNumber=candidate.number;booking.ambulanceType=candidate.type;booking.government=candidate.government;booking.lat=candidate.lat;booking.lng=candidate.lng;booking.eta=candidate.eta;booking.fare=candidate.fare;booking.requestedAt=Date.now();candidate.status='REQUESTED';booking.requestedCaptain=candidate.captain;
-  broadcast();
-  clearTimeout(bookingTimers.get(booking.id));
-  bookingTimers.set(booking.id,setTimeout(()=>{
-    const b=state.bookings.find(x=>x.id===booking.id);const a=state.ambulances.find(x=>x.id===candidate.id);
-    if(!b||!a||b.status!=='REQUESTED'||b.ambulanceId!==candidate.id)return;
-    a.status='AVAILABLE';b.candidateIndex+=1;
-    if(b.candidateIndex<b.candidateIds.length){requestCandidate(b);return;}
-    // Safety for demo: never end in "not available". Restart the nearest candidate.
-    b.candidateIndex=0;requestCandidate(b);
-  },8000));
-}
-app.post('/api/bookings',(req,res)=>{
-  const candidates=rankedAvailable().map(a=>a.id);
-  if(!candidates.length){resetDemo();}
-  const ids=rankedAvailable().map(a=>a.id);
-  const b={id:`FA-${++seq}`,userLat:state.demoUser.lat,userLng:state.demoUser.lng,ambulanceId:null,captainId:null,captain:'Finding nearest demo captain…',ambulanceNumber:'SEARCHING',ambulanceType:'DEMO',government:false,lat:state.demoUser.lat,lng:state.demoUser.lng,eta:0,fare:0,status:'REQUESTED',candidateIds:ids,candidateIndex:0,createdAt:Date.now()};
-  state.bookings.push(b);requestCandidate(b);res.json(b);
-});
-app.post('/api/bookings/:id/decline',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a)a.status='AVAILABLE';clearTimeout(bookingTimers.get(b.id));bookingTimers.delete(b.id);b.candidateIndex+=1;if(b.candidateIndex>=b.candidateIds.length)b.candidateIndex=0;requestCandidate(b);res.json(b);});
-app.post('/api/bookings/:id/accept',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(!a)return res.status(400).json({error:'Captain not found'});clearTimeout(bookingTimers.get(b.id));bookingTimers.delete(b.id);b.status='CAPTAIN_ACCEPTED';b.acceptedAt=Date.now();a.status='BUSY';broadcast();res.json(b);});
-app.post('/api/bookings/:id/status',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});const allowed=['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL','COMPLETED'];if(!allowed.includes(req.body.status))return res.status(400).json({error:'Invalid status'});b.status=req.body.status;if(validCoord(req.body.lat,req.body.lng)){b.lat=Number(req.body.lat);b.lng=Number(req.body.lng);}const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a){a.lat=b.lat;a.lng=b.lng;if(b.status==='COMPLETED'){bookingTimers.delete(b.id);a.status='AVAILABLE';a.lat=a.homeLat;a.lng=a.homeLng;}}broadcast();res.json(b);});
+app.get('/api/hospitals',(req,res)=>{const b=state.bookings.find(x=>x.id===req.query.bookingId);const center=b?{lat:b.userLat,lng:b.userLng}:state.demoUser;res.json(makeHospitals(center));});
+function requestCandidate(b){if(!b||b.status!=='REQUESTED')return;const c=state.ambulances.find(a=>a.id===b.candidateIds[b.candidateIndex]);if(!c){b.candidateIndex=0;return requestCandidate(b);}b.ambulanceId=c.id;b.captainId=c.captainId;b.captain=c.captain;b.ambulanceNumber=c.number;b.lat=c.lat;b.lng=c.lng;b.eta=c.eta;b.requestedAt=Date.now();c.status='REQUESTED';broadcast();clearTimeout(bookingTimers.get(b.id));bookingTimers.set(b.id,setTimeout(()=>{const bb=state.bookings.find(x=>x.id===b.id),aa=state.ambulances.find(x=>x.id===c.id);if(!bb||!aa||bb.status!=='REQUESTED'||bb.ambulanceId!==c.id)return;aa.status='AVAILABLE';bb.candidateIndex++;if(bb.candidateIndex<bb.candidateIds.length)requestCandidate(bb);else{bb.candidateIndex=0;requestCandidate(bb);}},7000));}
+app.post('/api/bookings',(req,res)=>{let ids=rankedAvailable().map(a=>a.id);if(!ids.length){resetDemo();ids=rankedAvailable().map(a=>a.id);}const b={id:`FA-${++seq}`,userLat:state.demoUser.lat,userLng:state.demoUser.lng,ambulanceId:null,captainId:null,captain:'Finding nearest demo captain…',ambulanceNumber:'SEARCHING',lat:state.demoUser.lat,lng:state.demoUser.lng,eta:0,status:'REQUESTED',candidateIds:ids,candidateIndex:0,createdAt:Date.now(),hospitalLat:null,hospitalLng:null,hospitalName:null,routePhase:'CAPTAIN_TO_PATIENT'};state.bookings.push(b);requestCandidate(b);res.json(b);});
+app.post('/api/bookings/:id/decline',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a)a.status='AVAILABLE';clearTimeout(bookingTimers.get(b.id));bookingTimers.delete(b.id);b.candidateIndex=(b.candidateIndex+1)%b.candidateIds.length;requestCandidate(b);res.json(b);});
+app.post('/api/bookings/:id/accept',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(!a)return res.status(400).json({error:'Captain not found'});clearTimeout(bookingTimers.get(b.id));bookingTimers.delete(b.id);b.status='CAPTAIN_ACCEPTED';a.status='BUSY';b.routePhase='CAPTAIN_TO_PATIENT';broadcast();res.json(b);});
+function stopMovement(id){const t=movementTimers.get(id);if(t){clearInterval(t);movementTimers.delete(id);}}
+function startMovement(b,dest,nextStatus){stopMovement(b.id);const start={lat:b.lat,lng:b.lng},steps=24;let i=0;b.routePhase=nextStatus==='ARRIVED'?'CAPTAIN_TO_PATIENT':'PATIENT_TO_HOSPITAL';b.route={start,dest,progress:0};b.status=nextStatus==='ARRIVED'?'ON_THE_WAY':'GOING_TO_HOSPITAL';broadcast();const timer=setInterval(()=>{const bb=state.bookings.find(x=>x.id===b.id);if(!bb){stopMovement(b.id);return;}i++;const p=Math.min(1,i/steps);bb.lat=start.lat+(dest.lat-start.lat)*p;bb.lng=start.lng+(dest.lng-start.lng)*p;bb.route.progress=p;const a=state.ambulances.find(x=>x.id===bb.ambulanceId);if(a){a.lat=bb.lat;a.lng=bb.lng;}if(p>=1){stopMovement(bb.id);bb.lat=dest.lat;bb.lng=dest.lng;bb.status=nextStatus;bb.route.progress=1;broadcast();}else broadcast();},350);movementTimers.set(b.id,timer);}
+app.post('/api/bookings/:id/start',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='CAPTAIN_ACCEPTED')return res.status(400).json({error:'Captain must accept first'});startMovement(b,{lat:b.userLat,lng:b.userLng},'ARRIVED');res.json(b);});
+app.post('/api/bookings/:id/select-hospital',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='PATIENT_PICKED_UP')return res.status(400).json({error:'Patient must be picked up first'});const h=makeHospitals({lat:b.userLat,lng:b.userLng}).find(x=>x.id===req.body.hospitalId);if(!h)return res.status(400).json({error:'Hospital not found'});b.hospitalId=h.id;b.hospitalName=h.name;b.hospitalLat=h.lat;b.hospitalLng=h.lng;b.hospitalEta=h.eta;startMovement(b,{lat:h.lat,lng:h.lng},'ARRIVED_AT_HOSPITAL');res.json(b);});
+app.post('/api/bookings/:id/status',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});const s=req.body.status;if(s==='PATIENT_PICKED_UP'){if(b.status!=='ARRIVED')return res.status(400).json({error:'Ambulance has not reached patient'});b.status='PATIENT_PICKED_UP';b.routePhase='WAITING_FOR_HOSPITAL';broadcast();return res.json(b);}if(s==='COMPLETED'){if(b.status!=='ARRIVED_AT_HOSPITAL')return res.status(400).json({error:'Hospital has not been reached'});b.status='COMPLETED';stopMovement(b.id);const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a){a.status='AVAILABLE';a.lat=a.homeLat;a.lng=a.homeLng;}broadcast();return res.json(b);}return res.status(400).json({error:'Use the trip action buttons for this demo flow'});});
 io.on('connection',s=>s.emit('state:update',clone()));
-app.use('/api',(req,res,next)=>res.status(404).json({error:'API endpoint not found'}));
+app.use('/api',(req,res)=>res.status(404).json({error:'API endpoint not found'}));
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
 server.listen(PORT,'0.0.0.0',()=>console.log(`FastAid Demo running on port ${PORT}`));
