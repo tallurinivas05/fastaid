@@ -1,259 +1,70 @@
-const express = require("express");
-const http = require("http");
-const path = require("path");
-const { Server } = require("socket.io");
+const express=require('express');
+const http=require('http');
+const path=require('path');
+const {Server}=require('socket.io');
+const app=express();
+const server=http.createServer(app);
+const io=new Server(server);
+const PORT=process.env.PORT||3000;
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-const PORT = process.env.PORT || 3000;
-
-// DEMO ONLY: no real ambulance search/API is used.
-const DEMO_CENTER = { lat: 17.4065, lng: 78.4772 };
-const DISPLAY_COUNT = 5;
-const DISPLAY_RADIUS_KM = 5;
-
-const demoCaptains = [
-  "Aarav Demo", "Vihaan Demo", "Reyansh Demo", "Advik Demo", "Kabir Demo",
-  "Arjun Demo", "Ishaan Demo", "Rohan Demo", "Neil Demo", "Ayaan Demo",
-  "Dev Demo", "Kian Demo", "Ritvik Demo", "Yuvan Demo", "Dhruv Demo",
-  "Aadi Demo", "Veer Demo", "Samir Demo", "Rudra Demo", "Aarush Demo"
-];
-const types = ["BLS", "ALS", "ICU", "Neonatal", "Cardiac"];
-
-// Exactly 20 fictional ambulances, arranged in four distance bands:
-// 5 around 1–5 km, 5 around 6–10 km, 5 around 11–15 km, 5 around 16–20 km.
-const distanceBandsKm = [
-  [1.4, 2.2, 3.1, 4.0, 4.7],
-  [6.2, 7.1, 8.0, 9.0, 9.7],
-  [11.3, 12.1, 13.0, 14.1, 14.8],
-  [16.2, 17.1, 18.0, 19.0, 19.6]
-];
-const anglesDeg = [15, 95, 165, 235, 305];
-
-function offsetForKm(distanceKm, angleDeg) {
-  const angle = angleDeg * Math.PI / 180;
-  const latKm = distanceKm * Math.cos(angle);
-  const lngKm = distanceKm * Math.sin(angle);
-  return {
-    lat: DEMO_CENTER.lat + latKm / 111,
-    lng: DEMO_CENTER.lng + lngKm / (111 * Math.cos(DEMO_CENTER.lat * Math.PI / 180))
-  };
+// DEMO ONLY: every ambulance is fictional. No real ambulance search/API is used.
+const FALLBACK_USER={lat:17.5065,lng:78.6172}; // Cheeryal-area demo fallback
+const BAND_DISTANCES=[1.4,2.3,3.4,4.6,6.3,7.5,8.7,9.6,11.4,12.6,13.8,14.7,16.4,17.6,18.5,19.6,2.0,5.0,10.0,15.0];
+const ANGLES=[15,95,165,235,305,40,120,200,280,330];
+const captains=['Aarav Demo','Vihaan Demo','Reyansh Demo','Advik Demo','Kabir Demo','Arjun Demo','Ishaan Demo','Rohan Demo','Neil Demo','Ayaan Demo','Dev Demo','Kian Demo','Ritvik Demo','Yuvan Demo','Dhruv Demo','Aadi Demo','Veer Demo','Samir Demo','Rudra Demo','Aarush Demo'];
+const types=['BLS','ALS','ICU','Neonatal','Cardiac'];
+function offset(center,km,deg){const a=deg*Math.PI/180;return {lat:center.lat+(km*Math.cos(a))/111,lng:center.lng+(km*Math.sin(a))/(111*Math.cos(center.lat*Math.PI/180))};}
+function makeAmbulances(center){return BAND_DISTANCES.map((km,i)=>{const p=offset(center,km,ANGLES[i%ANGLES.length]);return {id:`AMB-${String(i+1).padStart(3,'0')}`,number:`FA-DEMO-${String(i+1).padStart(2,'0')}`,captainId:`CAP-${String(i+1).padStart(2,'0')}`,captain:captains[i],type:types[i%types.length],lat:p.lat,lng:p.lng,homeLat:p.lat,homeLng:p.lng,distanceBand:km<=5?'0–5 km':km<=10?'5–10 km':km<=15?'10–15 km':'15–20 km',online:true,status:'AVAILABLE',government:i===0,eta:Math.max(4,Math.round(km*1.7)),fare:800+i*120};});}
+const state={demoMode:true,demoUser:{...FALLBACK_USER},ambulances:makeAmbulances(FALLBACK_USER),bookings:[]};
+let seq=1000;
+app.use(express.json());app.use(express.static(path.join(__dirname,'public')));
+const clone=()=>JSON.parse(JSON.stringify(state));
+const broadcast=()=>io.emit('state:update',clone());
+function distanceKm(a,b){const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-a.lng)*Math.PI/180;const x=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+function validCoord(lat,lng){return Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180;}
+function setDemoUser(lat,lng){state.demoUser={lat:Number(lat),lng:Number(lng)};state.ambulances=makeAmbulances(state.demoUser);}
+function rankedAvailable(){return state.ambulances.filter(a=>a.online&&a.status==='AVAILABLE').map(a=>({...a,distance:distanceKm(state.demoUser,a)})).sort((a,b)=>a.distance-b.distance);}
+function visibleAmbulances(){
+  const all=rankedAvailable();
+  // Map deliberately shows a few from each distance band, not all 20.
+  const picks=[]; const wanted=['0–5 km','5–10 km','10–15 km','15–20 km'];
+  wanted.forEach(b=>{const band=all.filter(a=>a.distanceBand===b);picks.push(...band.slice(0,2));});
+  return picks.slice(0,8);
 }
+function resetDemo(){state.ambulances=makeAmbulances(state.demoUser);state.bookings=[];}
 
-function makeAmbulances() {
-  const distances = distanceBandsKm.flat();
-  return Array.from({ length: 20 }, (_, i) => {
-    const home = offsetForKm(distances[i], anglesDeg[i % 5]);
-    return {
-      id: `AMB-${String(i + 1).padStart(3, "0")}`,
-      number: `FA-DEMO-${String(i + 1).padStart(2, "0")}`,
-      captainId: `CAP-${String(i + 1).padStart(2, "0")}`,
-      captain: demoCaptains[i],
-      type: types[i % types.length],
-      lat: home.lat,
-      lng: home.lng,
-      homeLat: home.lat,
-      homeLng: home.lng,
-      online: true,
-      status: "AVAILABLE",
-      government: i === 0,
-      eta: Math.max(4, Math.round(distances[i] * 1.7)),
-      fare: 800 + i * 120,
-      demoDistanceBand: `${Math.round(distances[i])} km`
-    };
-  });
-}
-
-const state = {
-  demoMode: true,
-  demoUser: { ...DEMO_CENTER },
-  ambulances: makeAmbulances(),
-  bookings: []
-};
-let bookingSeq = 1000;
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
-
-function cloneState() { return JSON.parse(JSON.stringify(state)); }
-function broadcast() { io.emit("state:update", cloneState()); }
-
-function distanceKm(a, b) {
-  const R = 6371;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLng = (b.lng - a.lng) * Math.PI / 180;
-  const x = Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-}
-
-// IMPORTANT: never searches the real world. It sorts our 20 fictional records
-// and returns the nearest 5 AVAILABLE/ONLINE records. If none are inside 5 km,
-// the nearest available records outside 5 km are used as a fallback.
-function nearestAvailable(userLat = DEMO_CENTER.lat, userLng = DEMO_CENTER.lng) {
-  return state.ambulances
-    .filter(a => a.online && a.status === "AVAILABLE")
-    .map(a => ({ ...a, distance: distanceKm({ lat: userLat, lng: userLng }, a) }))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, DISPLAY_COUNT);
-}
-
-function resetDemo() {
-  state.demoMode = true;
-  state.demoUser = { ...DEMO_CENTER };
-  state.ambulances = makeAmbulances();
-  state.bookings = [];
-}
-
-app.get("/api/state", (req, res) => {
-  // Demo mode intentionally uses a fixed fictional patient location.
-  const lat = DEMO_CENTER.lat;
-  const lng = DEMO_CENTER.lng;
-  const snapshot = cloneState();
-  snapshot.nearby = nearestAvailable(lat, lng);
-  snapshot.radiusKm = DISPLAY_RADIUS_KM;
-  snapshot.fallbackEnabled = true;
-  snapshot.note = "Demo only: nearest 5 fictional ambulances are shown; if none are within 5 km, the next nearest are shown.";
-  res.json(snapshot);
+app.get('/api/state',(req,res)=>{
+  if(validCoord(req.query.lat,req.query.lng)&&state.bookings.length===0){setDemoUser(req.query.lat,req.query.lng);}
+  const snap=clone();snap.nearby=rankedAvailable().slice(0,5);snap.mapAmbulances=visibleAmbulances();snap.radiusKm=5;snap.fallbackEnabled=true;snap.note='Demo only: 20 fictional ambulances are arranged in 0–5, 5–10, 10–15 and 15–20 km bands. The map shows a small sample from every band; booking always dispatches to the nearest available captain.';res.json(snap);
 });
+app.post('/api/demo-location',(req,res)=>{if(!validCoord(req.body.lat,req.body.lng))return res.status(400).json({error:'Invalid location'});if(state.bookings.length===0){setDemoUser(req.body.lat,req.body.lng);broadcast();}res.json({ok:true,location:state.demoUser});});
+app.post('/api/reset',(req,res)=>{resetDemo();broadcast();res.json({ok:true});});
 
-app.post("/api/reset", (req, res) => {
-  resetDemo();
+function requestCandidate(booking){
+  if(!booking||booking.status!=='REQUESTED')return;
+  const candidate=state.ambulances.find(a=>a.id===booking.candidateIds[booking.candidateIndex]);
+  if(!candidate){booking.candidateIndex=0;return requestCandidate(booking);}
+  booking.ambulanceId=candidate.id;booking.captainId=candidate.captainId;booking.captain=candidate.captain;booking.ambulanceNumber=candidate.number;booking.ambulanceType=candidate.type;booking.government=candidate.government;booking.lat=candidate.lat;booking.lng=candidate.lng;booking.eta=candidate.eta;booking.fare=candidate.fare;booking.requestedAt=Date.now();candidate.status='REQUESTED';booking.requestedCaptain=candidate.captain;
   broadcast();
-  res.json({ ok: true });
-});
-
-function dispatchNextCandidate(bookingId) {
-  const b = state.bookings.find(x => x.id === bookingId);
-  if (!b || b.status !== "REQUESTED") return;
-
-  const candidate = state.ambulances.find(a => a.id === b.candidateIds[b.candidateIndex]);
-  if (!candidate) {
-    // With 20 demo ambulances this should not happen during a normal single-user demo.
-    b.status = "REQUESTED";
-    broadcast();
-    return;
-  }
-
-  b.ambulanceId = candidate.id;
-  b.captainId = candidate.captainId;
-  b.captain = candidate.captain;
-  b.ambulanceNumber = candidate.number;
-  b.ambulanceType = candidate.type;
-  b.government = candidate.government;
-  b.lat = candidate.lat;
-  b.lng = candidate.lng;
-  b.eta = candidate.eta;
-  b.fare = candidate.fare;
-  b.requestedAt = Date.now();
-
-  candidate.status = "REQUESTED";
-  broadcast();
-
-  // Demo response simulation: every candidate has a fictional response delay.
-  // The first candidate deliberately times out once to demonstrate automatic
-  // fallback to the next nearest captain; the second candidate accepts quickly.
-  const isFirstCandidate = b.candidateIndex === 0;
-  const delay = isFirstCandidate ? 2800 : 1400;
-
-  setTimeout(() => {
-    const current = state.bookings.find(x => x.id === bookingId);
-    const amb = state.ambulances.find(x => x.id === candidate.id);
-    if (!current || !amb || current.status !== "REQUESTED" || current.ambulanceId !== candidate.id) return;
-
-    if (isFirstCandidate) {
-      amb.status = "AVAILABLE";
-      current.candidateIndex += 1;
-      broadcast();
-      dispatchNextCandidate(bookingId);
-      return;
-    }
-
-    current.status = "CAPTAIN_ACCEPTED";
-    amb.status = "BUSY";
-    current.acceptedAt = Date.now();
-    broadcast();
-  }, delay);
+  clearTimeout(booking._timer);
+  booking._timer=setTimeout(()=>{
+    const b=state.bookings.find(x=>x.id===booking.id);const a=state.ambulances.find(x=>x.id===candidate.id);
+    if(!b||!a||b.status!=='REQUESTED'||b.ambulanceId!==candidate.id)return;
+    a.status='AVAILABLE';b.candidateIndex+=1;
+    if(b.candidateIndex<b.candidateIds.length){requestCandidate(b);return;}
+    // Safety for demo: never end in "not available". Restart the nearest candidate.
+    b.candidateIndex=0;requestCandidate(b);
+  },8000);
 }
-
-app.post("/api/bookings", (req, res) => {
-  // Demo mode ignores any real GPS and always uses the fictional demo patient location.
-  const userLat = DEMO_CENTER.lat;
-  const userLng = DEMO_CENTER.lng;
-  const candidates = state.ambulances
-    .filter(a => a.online && a.status === "AVAILABLE")
-    .map(a => ({ id: a.id, distance: distanceKm({ lat: userLat, lng: userLng }, a) }))
-    .sort((a, b) => a.distance - b.distance);
-
-  if (!candidates.length) {
-    // Never expose "not available" in the normal demo: reset the demo pool.
-    resetDemo();
-  }
-
-  const freshCandidates = state.ambulances
-    .filter(a => a.online && a.status === "AVAILABLE")
-    .map(a => ({ id: a.id, distance: distanceKm({ lat: userLat, lng: userLng }, a) }))
-    .sort((a, b) => a.distance - b.distance)
-    .map(x => x.id);
-
-  const booking = {
-    id: `FA-${++bookingSeq}`,
-    userLat,
-    userLng,
-    ambulanceId: freshCandidates[0],
-    captainId: null,
-    captain: "Finding nearest demo captain…",
-    ambulanceNumber: "SEARCHING",
-    ambulanceType: "DEMO",
-    government: false,
-    lat: DEMO_CENTER.lat,
-    lng: DEMO_CENTER.lng,
-    eta: 0,
-    fare: 0,
-    status: "REQUESTED",
-    candidateIds: freshCandidates,
-    candidateIndex: 0,
-    createdAt: Date.now()
-  };
-
-  state.bookings.push(booking);
-  dispatchNextCandidate(booking.id);
-  res.json(booking);
+app.post('/api/bookings',(req,res)=>{
+  const candidates=rankedAvailable().map(a=>a.id);
+  if(!candidates.length){resetDemo();}
+  const ids=rankedAvailable().map(a=>a.id);
+  const b={id:`FA-${++seq}`,userLat:state.demoUser.lat,userLng:state.demoUser.lng,ambulanceId:null,captainId:null,captain:'Finding nearest demo captain…',ambulanceNumber:'SEARCHING',ambulanceType:'DEMO',government:false,lat:state.demoUser.lat,lng:state.demoUser.lng,eta:0,fare:0,status:'REQUESTED',candidateIds:ids,candidateIndex:0,createdAt:Date.now()};
+  state.bookings.push(b);requestCandidate(b);res.json(b);
 });
-
-app.post("/api/bookings/:id/status", (req, res) => {
-  const b = state.bookings.find(x => x.id === req.params.id);
-  if (!b) return res.status(404).json({ error: "Booking not found" });
-
-  const allowed = [
-    "REQUESTED", "CAPTAIN_ACCEPTED", "ON_THE_WAY", "ARRIVED",
-    "PATIENT_PICKED_UP", "GOING_TO_HOSPITAL", "ARRIVED_AT_HOSPITAL", "COMPLETED"
-  ];
-  if (!allowed.includes(req.body.status)) return res.status(400).json({ error: "Invalid status" });
-
-  b.status = req.body.status;
-  if (Number.isFinite(Number(req.body.lat))) b.lat = Number(req.body.lat);
-  if (Number.isFinite(Number(req.body.lng))) b.lng = Number(req.body.lng);
-
-  const a = state.ambulances.find(x => x.id === b.ambulanceId);
-  if (a) {
-    a.lat = b.lat;
-    a.lng = b.lng;
-    if (b.status === "COMPLETED") {
-      a.status = "AVAILABLE";
-      a.lat = a.homeLat;
-      a.lng = a.homeLng;
-    }
-  }
-
-  broadcast();
-  res.json(b);
-});
-
-io.on("connection", socket => socket.emit("state:update", cloneState()));
-app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`FastAid Demo running on port ${PORT}`);
-});
+app.post('/api/bookings/:id/accept',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(!a)return res.status(400).json({error:'Captain not found'});clearTimeout(b._timer);b.status='CAPTAIN_ACCEPTED';b.acceptedAt=Date.now();a.status='BUSY';broadcast();res.json(b);});
+app.post('/api/bookings/:id/status',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});const allowed=['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL','COMPLETED'];if(!allowed.includes(req.body.status))return res.status(400).json({error:'Invalid status'});b.status=req.body.status;if(validCoord(req.body.lat,req.body.lng)){b.lat=Number(req.body.lat);b.lng=Number(req.body.lng);}const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a){a.lat=b.lat;a.lng=b.lng;if(b.status==='COMPLETED'){a.status='AVAILABLE';a.lat=a.homeLat;a.lng=a.homeLng;}}broadcast();res.json(b);});
+io.on('connection',s=>s.emit('state:update',clone()));
+app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
+server.listen(PORT,'0.0.0.0',()=>console.log(`FastAid Demo running on port ${PORT}`));
