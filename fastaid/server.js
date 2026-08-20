@@ -26,10 +26,12 @@ function setDemoUser(lat,lng){state.demoUser={lat:Number(lat),lng:Number(lng)};s
 function rankedAvailable(){return state.ambulances.filter(a=>a.online&&a.status==='AVAILABLE').map(a=>({...a,distance:distanceKm(state.demoUser,a)})).sort((a,b)=>a.distance-b.distance);}
 function visibleAmbulances(){
   const all=rankedAvailable();
-  // Map deliberately shows a few from each distance band, not all 20.
-  const picks=[]; const wanted=['0–5 km','5–10 km','10–15 km','15–20 km'];
-  wanted.forEach(b=>{const band=all.filter(a=>a.distanceBand===b);picks.push(...band.slice(0,2));});
-  return picks.slice(0,8);
+  // Clean map: 3 nearest within 0–5 km + one from each outer band. Never show all 20.
+  const picks=[];
+  const near=all.filter(a=>a.distanceBand==='0–5 km').slice(0,3);
+  picks.push(...near);
+  ['5–10 km','10–15 km','15–20 km'].forEach(b=>{const a=all.find(x=>x.distanceBand===b);if(a)picks.push(a);});
+  return picks.slice(0,6);
 }
 function resetDemo(){state.ambulances=makeAmbulances(state.demoUser);state.bookings=[];}
 
@@ -63,8 +65,10 @@ app.post('/api/bookings',(req,res)=>{
   const b={id:`FA-${++seq}`,userLat:state.demoUser.lat,userLng:state.demoUser.lng,ambulanceId:null,captainId:null,captain:'Finding nearest demo captain…',ambulanceNumber:'SEARCHING',ambulanceType:'DEMO',government:false,lat:state.demoUser.lat,lng:state.demoUser.lng,eta:0,fare:0,status:'REQUESTED',candidateIds:ids,candidateIndex:0,createdAt:Date.now()};
   state.bookings.push(b);requestCandidate(b);res.json(b);
 });
+app.post('/api/bookings/:id/decline',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a)a.status='AVAILABLE';clearTimeout(b._timer);b.candidateIndex+=1;if(b.candidateIndex>=b.candidateIds.length)b.candidateIndex=0;requestCandidate(b);res.json(b);});
 app.post('/api/bookings/:id/accept',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});if(b.status!=='REQUESTED')return res.status(400).json({error:'Request is no longer waiting'});const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(!a)return res.status(400).json({error:'Captain not found'});clearTimeout(b._timer);b.status='CAPTAIN_ACCEPTED';b.acceptedAt=Date.now();a.status='BUSY';broadcast();res.json(b);});
 app.post('/api/bookings/:id/status',(req,res)=>{const b=state.bookings.find(x=>x.id===req.params.id);if(!b)return res.status(404).json({error:'Booking not found'});const allowed=['REQUESTED','CAPTAIN_ACCEPTED','ON_THE_WAY','ARRIVED','PATIENT_PICKED_UP','GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL','COMPLETED'];if(!allowed.includes(req.body.status))return res.status(400).json({error:'Invalid status'});b.status=req.body.status;if(validCoord(req.body.lat,req.body.lng)){b.lat=Number(req.body.lat);b.lng=Number(req.body.lng);}const a=state.ambulances.find(x=>x.id===b.ambulanceId);if(a){a.lat=b.lat;a.lng=b.lng;if(b.status==='COMPLETED'){a.status='AVAILABLE';a.lat=a.homeLat;a.lng=a.homeLng;}}broadcast();res.json(b);});
 io.on('connection',s=>s.emit('state:update',clone()));
+app.use('/api',(req,res,next)=>res.status(404).json({error:'API endpoint not found'}));
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
 server.listen(PORT,'0.0.0.0',()=>console.log(`FastAid Demo running on port ${PORT}`));
