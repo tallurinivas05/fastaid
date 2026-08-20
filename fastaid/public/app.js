@@ -35,6 +35,7 @@ async function bookNow(){const btn=$('#bookBtn');btn.disabled=true;btn.textConte
 async function locateUser(){userLocation={...MAP_CENTER};map?.setView([MAP_CENTER.lat,MAP_CENTER.lng],MAP_ZOOM,{animate:false});toast('Demo location: Cheeriyal')}
 function renderCaptain(){const v=$('#captainView'),active=state.bookings.find(b=>b.status!=='COMPLETED');if(!active){v.innerHTML=`<div class="title-row"><div><small>CAPTAIN / AMBULANCE DRIVER</small><h2>Captain dashboard</h2></div><span class="live">● LIVE NETWORK</span></div><div class="card empty-card"><div class="big-emoji">🚑</div><h3>Waiting for a demo request</h3><p>Book from the User device.</p></div>`;return}let action='';if(active.status==='REQUESTED')action='<div class="button-row"><button id="acceptBtn" class="book-btn">ACCEPT REQUEST</button><button id="declineBtn" class="secondary-btn">DECLINE / NEXT CAPTAIN</button></div>';if(active.status==='CAPTAIN_ACCEPTED')action='<button id="startBtn" class="book-btn">START TRIP</button>';if(active.status==='ARRIVED')action='<button id="pickupBtn" class="book-btn">PICK UP PATIENT</button>';if(active.status==='PATIENT_PICKED_UP')action='<div class="hospital-pick"><h3>SELECT NEARBY HOSPITAL</h3><p>Choose a demo hospital. The ambulance will move there automatically.</p><div id="hospitalList"></div></div>';if(active.status==='ARRIVED_AT_HOSPITAL')action='<button id="closeBtn" class="book-btn">COMPLETE TRIP</button>';v.innerHTML=`<div class="title-row"><div><small>CAPTAIN / AMBULANCE DRIVER</small><h2>Captain dashboard</h2></div><span class="live">● LIVE NETWORK</span></div><div class="map-card"><div class="map-title">LIVE CAPTAIN / AMBULANCE MAP <span>${esc(active.status.replaceAll('_',' '))}</span></div><div id="captainMap" class="map big"></div></div><div class="card"><div class="status-line"><b>${esc(active.ambulanceNumber)}</b><span class="badge">${esc(active.status.replaceAll('_',' '))}</span></div><p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p>${active.hospitalName?`<p><b>Hospital:</b> ${esc(active.hospitalName)}</p>`:''}${action}</div><div class="card tracking-card"><div class="status-line"><b>LIVE TRACKING</b><span class="badge" data-track-eta>-- min</span></div><p><b>Distance to patient:</b> <span data-track-distance>-- km</span></p><p class="track-note">🚑 Only the ambulance marker moves; the map stays fixed.</p></div>`;renderMap([],active,true);if(active.status==='REQUESTED'){$('#acceptBtn').onclick=()=>api(`/api/bookings/${active.id}/accept`,{method:'POST'});$('#declineBtn').onclick=()=>api(`/api/bookings/${active.id}/decline`,{method:'POST'})}if(active.status==='CAPTAIN_ACCEPTED')$('#startBtn').onclick=()=>api(`/api/bookings/${active.id}/start`,{method:'POST'});if(active.status==='ARRIVED')$('#pickupBtn').onclick=()=>api(`/api/bookings/${active.id}/status`,{method:'POST',body:JSON.stringify({status:'PATIENT_PICKED_UP'})});if(active.status==='PATIENT_PICKED_UP')loadHospitals(active);if(active.status==='ARRIVED_AT_HOSPITAL')$('#closeBtn').onclick=()=>api(`/api/bookings/${active.id}/status`,{method:'POST',body:JSON.stringify({status:'COMPLETED'})})}
 async function loadHospitals(b){try{const hs=await api(`/api/hospitals?bookingId=${encodeURIComponent(b.id)}`);$('#hospitalList').innerHTML=hs.map(h=>`<button class="hospital-option" data-h="${h.id}"><span>🏥</span><span><b>${esc(h.name)}</b><small>${h.distance.toFixed(1)} km • ${h.eta} min</small></span><strong>SELECT</strong></button>`).join('');document.querySelectorAll('.hospital-option').forEach(x=>x.onclick=async()=>{x.disabled=true;try{await api(`/api/bookings/${b.id}/select-hospital`,{method:'POST',body:JSON.stringify({hospitalId:x.dataset.h})});toast('Hospital selected — ambulance is moving')}catch(e){toast(e.message,true)}})}catch(e){toast(e.message,true)}}
+let hospitalTab='arrivals';
 function renderHospital(){
   const v=$('#hospitalView');
   const active=state.bookings.find(b=>['GOING_TO_HOSPITAL','ARRIVED_AT_HOSPITAL'].includes(b.status));
@@ -43,41 +44,70 @@ function renderHospital(){
   const outgoing=requests.filter(r=>r.direction==='OUTGOING');
   const incoming=requests.filter(r=>r.direction==='INCOMING'&&r.status==='REQUEST_SENT');
   const acceptedIncoming=requests.filter(r=>r.direction==='INCOMING'&&r.status==='ACCEPTED');
+
   v.innerHTML=`
   <div class="title-row"><div><small>AUTHORIZED STAFF ONLY</small><h2>Hospital dashboard</h2></div><span class="live">● LIVE NETWORK</span></div>
 
-  <div class="card hospital-arrivals-card">
-    <div class="status-line"><h3 style="margin:0">🚑 AMBULANCE ARRIVALS</h3><span class="badge">${active?'LIVE ARRIVAL':'READY'}</span></div>
-    ${active?`<div class="arrival-map-wrap"><div id="hospitalMap" class="map big"></div></div>
-      <div class="arrival-info"><div class="status-line"><b>${esc(active.ambulanceNumber)}</b><span class="badge">${esc(active.status.replaceAll('_',' '))}</span></div>
-      <p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p><p><b>Hospital:</b> ${esc(active.hospitalName||'Selected hospital')}</p><p><b>Captain → Hospital:</b> <span data-hospital-distance>-- km</span></p><p><b>ETA:</b> <span data-hospital-eta>-- min</span></p><p class="track-note">🚑 Live route: only the ambulance marker moves. The map viewport stays fixed.</p></div>`:
-      '<div class="empty">No ambulance is currently on the way to the hospital. Arrivals appear here after a captain accepts the trip and a hospital is selected.</div>'}
-    ${completed.length?`<div class="arrival-history"><h4>ARRIVAL HISTORY</h4>${completed.map(b=>`<div class="history"><b>🚑 ${esc(b.ambulanceNumber)}</b><span>${esc(b.captain)}</span><span>COMPLETED</span></div>`).join('')}</div>`:''}
+  <div class="hospital-tabs" role="tablist" aria-label="Hospital interfaces">
+    <button class="hospital-tab ${hospitalTab==='arrivals'?'active':''}" data-hospital-tab="arrivals" role="tab">🚑<span>AMBULANCE<br>ARRIVALS</span></button>
+    <button class="hospital-tab ${hospitalTab==='request'?'active':''}" data-hospital-tab="request" role="tab">🩸<span>BLOOD<br>EMERGENCY</span></button>
+    <button class="hospital-tab ${hospitalTab==='accepts'?'active':''}" data-hospital-tab="accepts" role="tab">🩸<span>BLOOD REQUEST<br>ACCEPTS</span></button>
   </div>
 
-  <div class="card blood-dashboard blood-request-interface">
-    <div class="status-line"><h3 style="margin:0">🩸 BLOOD EMERGENCY REQUEST</h3><span class="badge blood-badge">1 / 3</span></div>
-    <p class="sub">Choose a nearby demo blood bank, select the required blood group and send an emergency request.</p>
-    <div class="blood-form"><label>GROUP<select id="bloodGroup"><option>O+</option><option>O-</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option></select></label><label>UNITS<input id="bloodUnits" type="number" min="1" value="2"></label><label>URGENCY<select id="bloodUrgency"><option>CRITICAL</option><option>URGENT</option><option>NORMAL</option></select></label></div>
-    <h4 class="blood-subhead">NEARBY AVAILABLE BLOOD BANKS</h4>
-    <div id="bloodProvidersList" class="blood-provider-list"><div class="empty">Loading nearby demo blood banks…</div></div>
-    <button id="bloodRequestBtn" class="book-btn blood-btn">SEND BLOOD REQUEST</button>
-    ${outgoing.length?`<div class="sent-blood-list"><h4>SENT REQUESTS</h4>${outgoing.slice(-4).reverse().map(r=>`<div class="blood-request"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.providerName)} • ${esc(r.urgency)}</small></div><span class="badge">${esc(r.status.replaceAll('_',' '))}</span></div>`).join('')}</div>`:''}
+  <div class="hospital-interface ${hospitalTab==='arrivals'?'':'hidden'}" data-hospital-panel="arrivals">
+    <div class="card hospital-arrivals-card">
+      <div class="status-line"><h3 style="margin:0">🚑 AMBULANCE ARRIVALS</h3><span class="badge">${active?'LIVE ARRIVAL':'READY'}</span></div>
+      ${active?`<div class="arrival-map-wrap"><div id="hospitalMap" class="map big"></div></div>
+        <div class="arrival-info"><div class="status-line"><b>${esc(active.ambulanceNumber)}</b><span class="badge">${esc(active.status.replaceAll('_',' '))}</span></div>
+        <p><b>Captain:</b> ${esc(active.captain)}</p><p><b>Patient:</b> Cheeriyal</p><p><b>Hospital:</b> ${esc(active.hospitalName||'Selected hospital')}</p><p><b>Captain → Hospital:</b> <span data-hospital-distance>-- km</span></p><p><b>ETA:</b> <span data-hospital-eta>-- min</span></p><p class="track-note">🚑 Live tracking — map stays fixed and only the ambulance marker moves.</p></div>`:
+        '<div class="empty">No ambulance is currently on the way to the hospital. Arrivals appear here after the captain accepts the trip and a hospital is selected.</div>'}
+      ${completed.length?`<div class="arrival-history"><h4>ARRIVAL HISTORY</h4>${completed.map(b=>`<div class="history"><b>🚑 ${esc(b.ambulanceNumber)}</b><span>${esc(b.captain)}</span><span>COMPLETED</span></div>`).join('')}</div>`:''}
+    </div>
   </div>
 
-  <div class="card blood-dashboard blood-accept-interface">
-    <div class="status-line"><h3 style="margin:0">🩸 BLOOD REQUEST ACCEPTS</h3><span class="badge blood-badge">2 / 3</span></div>
-    <p class="sub">Incoming demo hospitals can request blood from this hospital. Accept or mark unavailable here.</p>
-    ${incoming.length?incoming.map(r=>`<div class="blood-request incoming-blood"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.requestingHospitalName)} • ${esc(r.urgency)}</small></div><div class="button-row"><button class="book-btn blood-accept" data-blood-id="${r.id}">ACCEPT BLOOD</button><button class="secondary-btn blood-reject" data-blood-id="${r.id}">NOT AVAILABLE</button></div></div>`).join(''):'<div class="empty">No pending incoming blood requests.</div>'}
-    ${acceptedIncoming.length?`<div class="accepted-blood"><h4>ACCEPTED BLOOD REQUESTS</h4>${acceptedIncoming.map(r=>`<div class="blood-history-row"><b>✓ ${esc(r.bloodGroup)} • ${r.unitsRequired} units</b><span>${esc(r.requestingHospitalName)}</span><span>ACCEPTED</span></div>`).join('')}</div>`:''}
+  <div class="hospital-interface ${hospitalTab==='request'?'':'hidden'}" data-hospital-panel="request">
+    <div class="card blood-dashboard blood-request-interface">
+      <div class="status-line"><h3 style="margin:0">🩸 BLOOD EMERGENCY REQUEST</h3><span class="badge">1 / 3</span></div>
+      <p class="sub">Choose a nearby demo blood bank, select the required blood group and send an emergency request.</p>
+      <div class="blood-form"><label>GROUP<select id="bloodGroup"><option>O+</option><option>O-</option><option>A+</option><option>A-</option><option>B+</option><option>B-</option><option>AB+</option><option>AB-</option></select></label><label>UNITS<input id="bloodUnits" type="number" min="1" value="2"></label><label>URGENCY<select id="bloodUrgency"><option>CRITICAL</option><option>URGENT</option><option>NORMAL</option></select></label></div>
+      <h4 class="blood-subhead">NEARBY AVAILABLE BLOOD BANKS</h4>
+      <div id="bloodProvidersList" class="blood-provider-list"><div class="empty">Loading nearby demo blood banks…</div></div>
+      <button id="bloodRequestBtn" class="book-btn blood-btn">SEND BLOOD REQUEST</button>
+      ${outgoing.length?`<div class="sent-blood-list"><h4>SENT REQUESTS</h4>${outgoing.slice(-4).reverse().map(r=>`<div class="blood-request"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.providerName)} • ${esc(r.urgency)}</small></div><span class="badge">${esc(r.status.replaceAll('_',' '))}</span></div>`).join('')}</div>`:''}
+    </div>
+  </div>
+
+  <div class="hospital-interface ${hospitalTab==='accepts'?'':'hidden'}" data-hospital-panel="accepts">
+    <div class="card blood-dashboard blood-accept-interface">
+      <div class="status-line"><h3 style="margin:0">🩸 BLOOD REQUEST ACCEPTS</h3><span class="badge">2 / 3</span></div>
+      <p class="sub">Incoming demo hospital blood requests. Accept or mark unavailable here.</p>
+      ${incoming.length?incoming.map(r=>`<div class="blood-request incoming-blood"><div><b>🩸 ${esc(r.bloodGroup)} • ${r.unitsRequired} UNITS</b><small>${esc(r.requestingHospitalName)} • ${esc(r.urgency)}</small></div><div class="button-row"><button class="book-btn blood-accept" data-blood-id="${r.id}">ACCEPT BLOOD</button><button class="secondary-btn blood-reject" data-blood-id="${r.id}">NOT AVAILABLE</button></div></div>`).join(''):'<div class="empty">No pending incoming blood requests.</div>'}
+      ${acceptedIncoming.length?`<div class="accepted-blood"><h4>ACCEPTED BLOOD REQUESTS</h4>${acceptedIncoming.map(r=>`<div class="blood-history-row"><b>✓ ${esc(r.bloodGroup)} • ${r.unitsRequired} units</b><span>${esc(r.requestingHospitalName)}</span><span>ACCEPTED</span></div>`).join('')}</div>`:''}
+    </div>
   </div>`;
 
-  if(active){hospitalBookingId=active.id;renderHospitalMap(active);updateHospitalTracking(active)} else {hospitalBookingId=null;if(hospitalMap){hospitalMap.remove();hospitalMap=null}hospitalAmbMarker=null;}
-  loadBloodProviders($('#bloodGroup')?.value||'O+');
-  $('#bloodGroup').onchange=()=>loadBloodProviders($('#bloodGroup').value);
-  $('#bloodRequestBtn').onclick=sendBloodRequest;
-  document.querySelectorAll('.blood-accept').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,true));
-  document.querySelectorAll('.blood-reject').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,false));
+  document.querySelectorAll('[data-hospital-tab]').forEach(btn=>btn.onclick=()=>{
+    hospitalTab=btn.dataset.hospitalTab;
+    renderHospital();
+  });
+
+  if(hospitalTab==='arrivals'){
+    if(active){hospitalBookingId=active.id;renderHospitalMap(active);updateHospitalTracking(active)}
+    else {hospitalBookingId=null;if(hospitalMap){hospitalMap.remove();hospitalMap=null}hospitalAmbMarker=null;}
+  } else {
+    if(hospitalMap){hospitalMap.remove();hospitalMap=null}
+    hospitalAmbMarker=null;
+  }
+
+  if(hospitalTab==='request'){
+    loadBloodProviders($('#bloodGroup')?.value||'O+');
+    $('#bloodGroup').onchange=()=>loadBloodProviders($('#bloodGroup').value);
+    $('#bloodRequestBtn').onclick=sendBloodRequest;
+  }
+  if(hospitalTab==='accepts'){
+    document.querySelectorAll('.blood-accept').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,true));
+    document.querySelectorAll('.blood-reject').forEach(x=>x.onclick=()=>respondBlood(x.dataset.bloodId,false));
+  }
 }
 async function loadBloodProviders(group){
   const box=$('#bloodProvidersList'); if(!box)return;
